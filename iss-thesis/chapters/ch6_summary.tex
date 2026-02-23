@@ -1,0 +1,80 @@
+% =================================================================
+% CHAPTER 6: SUMMARY AND FUTURE WORK
+% =================================================================
+\chapter{Summary and Future Work}
+\label{ch:summary}
+
+% -----------------------------------------------------------------
+\section{Summary}
+\label{sec:summary}
+
+This thesis presented a two-stage pipeline for semantically controlled video generation of autonomous driving scenes using latent diffusion models. The work was motivated by the need for controllable synthetic data generation, where semantic segmentation maps provide dense, interpretable, and pixel-level control over generated video content.
+
+The key contributions and findings are summarized as follows:
+
+\paragraph{Semantic-Native VAE.}
+A novel Variational Autoencoder architecture was designed to bridge the gap between discrete semantic label maps and the continuous latent space of a pretrained Stable Video Diffusion model. By bypassing the 3-channel RGB bottleneck and introducing trainable Semantic Stem (19$\rightarrow$64$\rightarrow$128 channels) and Semantic Head (128$\rightarrow$64$\rightarrow$19 channels) modules around a frozen VAE core, the model achieves 89.7\% mean Intersection-over-Union on KITTI-360 validation data with only $\sim$200K trainable parameters. This represents a 35.4\% absolute improvement over the naive RGB baseline approach.
+
+\paragraph{Loss Function Design.}
+The combination of boundary-weighted cross-entropy ($\alpha = 4.0$) and Dice loss ($\lambda = 0.5$) was shown to be critical for semantic reconstruction quality. Boundary weighting alone contributed +14.7\% mIoU improvement in the adapter model, while Dice loss provided an additional +1.7\% improvement in the native architecture by addressing class imbalance---particularly for rare classes such as traffic signs (82.2\% IoU) and poles (84.0\% IoU).
+
+\paragraph{Two-Stage Diffusion Pipeline.}
+The complete pipeline consists of:
+\begin{itemize}
+    \item \textbf{Stage~1:} A modified SVD backbone that predicts future semantic video sequences from an initial RGB frame, trained with the \texttt{--use\_segmentation} flag on KITTI-360 data.
+    \item \textbf{Stage~2:} A ControlNet-conditioned video diffusion model that generates photorealistic RGB videos guided by semantic maps, with only the ControlNet weights being trainable.
+\end{itemize}
+The pipeline achieves a Fr\'echet Inception Distance of 35.74 and a Fr\'echet Video Distance of 392.10 on KITTI-360, demonstrating competitive quality for driving video generation.
+
+\paragraph{Practical Insights.}
+The development process revealed several practical insights: (1) gradient flow through frozen layers requires careful management of PyTorch's autograd graph; (2) semantic ID remapping from sparse KITTI-360 labels to continuous training IDs is critical; (3) per-frame decoding with temporal 3D convolution heads provides a practical compromise between memory efficiency and temporal consistency; and (4) parallel training of Stage~1 and Stage~2 (using ground-truth semantic conditioning for Stage~2) significantly reduces total training time.
+
+% -----------------------------------------------------------------
+\section{Limitations}
+\label{sec:limitations}
+
+Despite the promising results, several limitations should be acknowledged:
+
+\begin{itemize}
+    \item \textbf{Resolution:} Training was performed at $192 \times 704$ resolution, which is lower than the original KITTI-360 resolution ($376 \times 1408$) and modern autonomous driving requirements. Higher resolutions would require more GPU memory and longer training times.
+    
+    \item \textbf{Dataset Scope:} All experiments were conducted on KITTI-360, which captures suburban driving in Karlsruhe, Germany. Generalization to other geographic regions, weather conditions, and driving scenarios remains to be evaluated.
+    
+    \item \textbf{Temporal Length:} The pipeline generates clips of 25 frames ($\sim$1 second at 25 FPS). Longer video generation would require either autoregressive extension or architectural changes to handle longer sequences.
+    
+    \item \textbf{Inference Speed:} The two-stage diffusion pipeline with 30 denoising steps per stage is computationally expensive at inference time, making real-time generation infeasible.
+    
+    \item \textbf{Evaluation Metrics:} FID and FVD, while standard, have known biases (ImageNet/Kinetics-400 feature extractors) that may not fully capture driving-specific quality. Task-specific downstream evaluation (e.g., training a perception model on generated data) would provide a more meaningful assessment.
+    
+    \item \textbf{Rare Class Performance:} While the Semantic VAE achieves strong performance on most classes, rare and small objects (motorcycle: 55\%, bicycle: 60\%) still have lower IoU compared to dominant classes, suggesting room for improvement in handling extreme class imbalance.
+\end{itemize}
+
+% -----------------------------------------------------------------
+\section{Future Work}
+\label{sec:future_work}
+
+Several directions for future research emerge from this work:
+
+\paragraph{Higher Resolution Training.}
+Scaling the pipeline to higher resolutions ($384 \times 1408$ or beyond) using techniques such as patch-based training, multi-resolution architectures, or more memory-efficient attention mechanisms would improve the practical utility of generated videos.
+
+\paragraph{Multi-Dataset Training.}
+Training on multiple driving datasets (Cityscapes~\cite{cordts2016cityscapes}, nuScenes, Waymo Open Dataset) would improve generalization and expose the model to diverse driving conditions, camera setups, and geographic environments.
+
+\paragraph{Temporal Extension.}
+Extending the pipeline to generate longer video sequences through autoregressive generation (using the last frame of one clip as the first frame of the next) or through latent interpolation techniques would increase the practical applicability.
+
+\paragraph{Downstream Task Evaluation.}
+Evaluating the generated videos by training downstream perception models (object detection, semantic segmentation, depth estimation) on synthetic data and measuring performance on real-world test sets would provide the most meaningful assessment of generation quality.
+
+\paragraph{Interactive Control.}
+Extending the pipeline to support interactive editing---where a user can modify the semantic map of specific frames and regenerate only the affected portions of the video---would enable creative applications beyond data augmentation.
+
+\paragraph{Conditional Semantic Generation.}
+Improving Stage~1 to accept richer conditioning signals (e.g., text descriptions of desired scene changes, trajectory waypoints, or high-level scene graphs) would enable more flexible control over the generated semantic sequences.
+
+\paragraph{Improved VAE Architecture.}
+Exploring more sophisticated Semantic VAE designs---such as multi-scale stem and head modules, attention-based boundary refinement, or class-conditional normalization layers---could further improve semantic reconstruction quality, particularly for rare and small classes.
+
+\paragraph{Real-Time Inference.}
+Applying diffusion distillation techniques (progressive distillation, consistency models) to reduce the number of denoising steps from 30 to 1--4 would bring the pipeline closer to real-time applicability.

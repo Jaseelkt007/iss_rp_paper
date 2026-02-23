@@ -1,0 +1,165 @@
+% =================================================================
+% CHAPTER 5: DISCUSSION
+% =================================================================
+\chapter{Discussion}
+\label{ch:discussion}
+
+This chapter analyzes the experimental results, discusses training challenges, evaluates the limitations of the employed metrics, and provides a comparison with related work.
+
+% -----------------------------------------------------------------
+\section{Analysis of Experimental Results}
+\label{sec:result_analysis}
+
+\subsection{Semantic VAE Performance}
+\label{subsec:vae_analysis}
+
+The progressive development of the Semantic VAE from Phase~1 (54.3\% mIoU) to Phase~2b (89.7\% mIoU) reveals several important insights about encoding discrete semantic information through continuous latent spaces.
+
+\paragraph{The RGB Bottleneck.}
+The most significant architectural decision was eliminating the 3-channel RGB bottleneck. The Phase~1 baseline demonstrates that a pretrained RGB VAE, despite achieving 97.7\% pixel accuracy, fundamentally cannot preserve semantic boundaries---the 35.4\% gap between Phase~1 and Phase~2b mIoU is almost entirely attributable to boundary errors. This finding has implications beyond semantic VAEs: any application that requires preserving discrete or sharp features through a VAE designed for natural images will encounter similar degradation.
+
+The underlying cause is the VAE's latent space topology. During pretraining on natural images, the VAE learns to encode smooth, continuous signals. The latent manifold is optimized for perceptual reconstruction quality (via LPIPS loss), which inherently prioritizes low-frequency content over high-frequency boundaries. When discrete label maps are forced through this bottleneck, the encoder maps adjacent but semantically different regions to nearby latent codes, and the decoder produces blended outputs at transitions.
+
+\paragraph{Boundary Emphasis as the Key Lever.}
+The +14.7\% mIoU improvement from boundary weighting alone (Phase~2a, $\alpha=0 \rightarrow \alpha=8$) confirms that the loss function plays a disproportionately important role relative to the small number of boundary pixels. Approximately 7--10\% of pixels in a typical KITTI-360 frame lie on class boundaries, yet these pixels contribute to over 40\% of mIoU errors in the unweighted case. By assigning $5\times$ weight to boundary pixels ($\alpha=4.0$), the optimization landscape is reshaped to prioritize these challenging regions.
+
+\paragraph{Dice Loss and Class Balance.}
+The Dice loss provides a more modest improvement (+1.7\% mIoU) but is critical for rare classes. Traffic signs, which occupy only $\sim$12K pixels out of $\sim$54M in the validation set (0.02\%), improve from 78.2\% to 82.2\% IoU with Dice loss. Without it, the cross-entropy gradient is dominated by the $\sim$14.6M vegetation pixels, effectively ignoring classes with three orders of magnitude fewer pixels.
+
+\subsection{Video Generation Quality}
+\label{subsec:video_quality}
+
+The achieved FID of 35.74 and FVD of 392.10 place our method in a competitive range for driving video generation, particularly considering the challenging KITTI-360 dataset with its high resolution ($192 \times 704$) and complex suburban scenes.
+
+\paragraph{FID Analysis.}
+An FID of 35.74 indicates that the distribution of generated frames is perceptually close to real frames. For context, state-of-the-art unconditional image generation on standard benchmarks (CIFAR-10, LSUN) achieves FID scores below 5, but domain-specific video generation on driving datasets typically reports values in the 30--80 range due to the diversity and complexity of real driving scenes.
+
+\paragraph{FVD Analysis.}
+The FVD of 392.10 captures both spatial quality and temporal coherence. While lower than ideal, this score reflects the inherent difficulty of generating 25-frame sequences where each frame must be spatially accurate and temporally smooth. The I3D features used for FVD computation are particularly sensitive to motion artifacts and temporal inconsistencies.
+
+\paragraph{LPIPS and SSIM.}
+The LPIPS score of 0.407 and SSIM of 0.346 indicate moderate frame-level similarity to ground truth. These metrics are expected to be moderate rather than high in our setting, because the model is not performing frame-level reconstruction but rather generating \emph{plausible} videos consistent with the semantic layout. Multiple valid RGB realizations exist for any given semantic map, and perfect pixel-level correspondence with one specific ground-truth video is neither expected nor necessary.
+
+% -----------------------------------------------------------------
+\section{Training Instabilities}
+\label{sec:instabilities}
+
+Several training instabilities were encountered and addressed during the development of the pipeline.
+
+\subsection{Semantic VAE Instabilities}
+\label{subsec:vae_instabilities}
+
+\paragraph{Gradient Flow Through Frozen Layers.}
+The Semantic-Native VAE requires gradients to flow from the trainable Semantic Head, backward through the frozen decoder core, through the frozen encoder core, and into the trainable Semantic Stem. Although the frozen layers do not update their weights, they must remain in the computation graph for gradient propagation. Initial experiments with \texttt{torch.no\_grad()} on the VAE core blocked this gradient flow, resulting in the stem not learning. The solution was to set \texttt{requires\_grad\_(False)} on VAE parameters (preventing weight updates) while keeping the forward pass within the autograd graph.
+
+\paragraph{Per-Frame Decoding Necessity.}
+The SVD temporal decoder expects a specific number of frames ($T_{\text{dec}}$) and applies temporal convolutions across them. Attempting to decode entire clips ($T=4$) simultaneously caused shape mismatches in the temporal layers. The workaround was to decode each frame independently ($T_{\text{dec}}=1$), which sacrifices some temporal coherence in the decoder's intermediate features but produces correct spatial features. The Semantic Head's 3D convolutions compensate by re-introducing temporal consistency at the output stage.
+
+\paragraph{Forward Hook Strategy.}
+Extracting the 128-channel features before the decoder's final output convolution (which maps 128$\rightarrow$3 for RGB) required PyTorch forward hooks. The hook must be registered on the correct layer (\texttt{conv\_act}, the activation before \texttt{conv\_out}) and must not detach tensors from the computation graph. Careful management of hook registration and removal was necessary to avoid memory leaks during training.
+
+\subsection{Diffusion Training Instabilities}
+\label{subsec:diffusion_instabilities}
+
+\paragraph{Semantic ID Remapping.}
+KITTI-360 uses sparse label IDs (e.g., ID 24 for ``person'', ID 26 for ``car'') that must be remapped to continuous training IDs (0--18) before encoding by the Semantic VAE. An early bug where raw IDs were passed without remapping caused the one-hot encoding to fail silently (IDs $>$ 18 were clamped to 18), producing incorrect semantic latents. This was resolved by adding explicit remapping in the dataset loader.
+
+\paragraph{VAE Freezing Verification.}
+During Stage~1 and Stage~2 training, the Semantic VAE must be fully frozen. A verification step was added to confirm that no VAE gradients are accumulated:
+\begin{verbatim}
+assert all(not p.requires_grad for p in semantic_vae.parameters())
+\end{verbatim}
+Without this check, accidental unfreezing would cause the VAE to drift, invalidating the shared latent space assumption.
+
+\paragraph{Memory Management.}
+Training Stage~2 (SVD UNet + ControlNet) on 25-frame clips at $192 \times 704$ resolution pushes GPU memory to the limit. Gradient checkpointing, FP16 mixed precision, and a batch size of 1 (with gradient accumulation) were all necessary to fit within 48~GB VRAM. Occasional out-of-memory (OOM) errors were addressed by reducing the number of data loader workers and enabling CUDA memory pooling.
+
+% -----------------------------------------------------------------
+\section{Limitations of Evaluation Metrics}
+\label{sec:metric_limitations}
+
+\subsection{FID Limitations}
+\label{subsec:fid_limitations}
+
+FID has several well-known limitations that are particularly relevant in our setting:
+\begin{itemize}
+    \item \textbf{Gaussian Assumption:} FID assumes that Inception features follow a multivariate Gaussian distribution, which may not hold for diverse driving scenes.
+    \item \textbf{Sample Size Sensitivity:} FID estimates are biased for small sample sizes. Our evaluation uses 200 validation clips, which may not fully capture the distribution.
+    \item \textbf{Frame Independence:} FID treats each frame independently and does not capture temporal relationships.
+    \item \textbf{Inception Bias:} The Inception-v3 network was trained on ImageNet, which has limited overlap with driving scenes. Features may not capture domain-specific quality aspects.
+\end{itemize}
+
+\subsection{FVD Limitations}
+\label{subsec:fvd_limitations}
+
+FVD partially addresses the temporal limitation of FID but introduces its own issues:
+\begin{itemize}
+    \item \textbf{I3D Action Bias:} The I3D network was trained for action recognition on Kinetics-400. Its features are optimized for human actions, not driving scenarios. Vehicle motion, road geometry, and traffic patterns may be underrepresented in the feature space.
+    \item \textbf{Fixed Temporal Window:} I3D processes clips of a fixed length, which may not align with the 25-frame clips used in our experiments, requiring padding or subsampling.
+    \item \textbf{Computational Cost:} FVD computation requires extracting I3D features from all generated and real videos, which is computationally expensive for large-scale evaluation.
+\end{itemize}
+
+\subsection{mIoU for VAE Evaluation}
+\label{subsec:miou_limitations}
+
+While mIoU is the standard metric for semantic segmentation, its use for evaluating a VAE's reconstruction quality has a subtle limitation: it equally weights all classes regardless of their visual importance. A class that is visually critical (e.g., cars) but spatially small may have the same mIoU weight as a less important but spatially dominant class (e.g., sky). Weighted mIoU variants could address this, but we use the standard unweighted version for comparability with the literature.
+
+% -----------------------------------------------------------------
+\section{Comparison with Related Work}
+\label{sec:comparison}
+
+\subsection{Comparison with Ctrl-V}
+\label{subsec:comparison_ctrlv}
+
+Our approach extends Ctrl-V~\cite{luo2025ctrlv} by replacing bounding-box conditioning with semantic segmentation maps. Table~\ref{tab:comparison_ctrlv} summarizes the key differences.
+
+\begin{table}[t]
+    \centering
+    \caption{Comparison between Ctrl-V (original) and our semantic extension}
+    \label{tab:comparison_ctrlv}
+    \begin{tabular}{lcc}
+        \toprule
+        \textbf{Aspect} & \textbf{Ctrl-V (BBox)} & \textbf{Ours (Semantic)} \\
+        \midrule
+        Control signal & 2D/3D bounding boxes & Semantic segmentation maps \\
+        Control density & Sparse (box outlines) & Dense (per-pixel labels) \\
+        Scene control & Object positions only & Full scene layout \\
+        VAE requirement & Standard RGB VAE & Semantic-Native VAE \\
+        Stage~1 output & BBox trajectory video & Semantic video \\
+        Stage~2 input & BBox frames & Semantic frames \\
+        Background control & None & Full (road, vegetation, sky) \\
+        Object shape control & None (box only) & Precise silhouettes \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+The key advantage of semantic conditioning is \textbf{dense scene control}: while bounding boxes specify only the positions and extents of objects, semantic maps specify the class of every pixel, including background elements (roads, buildings, vegetation, sky) that bounding boxes cannot control. This enables more precise and comprehensive scene specification, which is particularly valuable for synthetic data generation where pixel-level annotations are required.
+
+The trade-off is increased complexity: our approach requires a custom Semantic VAE to bridge the gap between discrete semantic labels and the continuous latent space, whereas Ctrl-V uses the standard RGB VAE to encode bounding box images (which are simply colored rectangles on a black background).
+
+\subsection{Comparison with GAN-Based Methods}
+\label{subsec:comparison_gans}
+
+GAN-based methods for driving video generation, such as SVS GAN~\cite{swerdlow2024svsgan}, offer an alternative paradigm. Key differences include:
+\begin{itemize}
+    \item \textbf{Training Stability:} Diffusion models exhibit more stable training compared to GANs, which suffer from mode collapse and require careful hyperparameter tuning.
+    \item \textbf{Sample Diversity:} Diffusion models naturally produce diverse samples through different noise initializations, while GANs may mode-collapse to a limited set of outputs.
+    \item \textbf{Inference Speed:} GANs generate samples in a single forward pass, while diffusion models require multiple denoising steps (30 in our case). This makes GANs significantly faster at inference time.
+    \item \textbf{Quality:} Recent diffusion models generally achieve better FID and FVD scores than GANs on complex datasets, consistent with the broader trend in generative modeling~\cite{dhariwal2021diffusion}.
+\end{itemize}
+
+% -----------------------------------------------------------------
+\section{Conclusion}
+\label{sec:conclusion}
+
+This chapter has analyzed the experimental results, revealing that:
+
+\begin{enumerate}
+    \item The Semantic-Native VAE achieves 89.7\% mIoU through the combination of bypassing the RGB bottleneck, boundary-weighted loss, and Dice loss---each addressing a distinct failure mode of naive approaches.
+    
+    \item The two-stage diffusion pipeline achieves competitive FID (35.74) and FVD (392.10) scores, demonstrating that semantic maps provide an effective control signal for video generation.
+    
+    \item Training instabilities related to gradient flow, semantic ID remapping, and memory management were identified and resolved, providing practical insights for future work.
+    
+    \item Standard evaluation metrics (FID, FVD) have domain-specific limitations when applied to driving video generation, suggesting that task-specific metrics (e.g., downstream perception performance) may better capture generation quality.
+\end{enumerate}

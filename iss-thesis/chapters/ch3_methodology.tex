@@ -1,0 +1,274 @@
+% =================================================================
+% CHAPTER 3: METHODOLOGY
+% =================================================================
+\chapter{Methodology}
+\label{ch:methodology}
+
+This chapter describes the dataset, evaluation metrics, the proposed model architectures, and the loss functions employed in this work.
+
+% -----------------------------------------------------------------
+\section{Dataset: KITTI-360}
+\label{sec:dataset}
+
+\subsection{Overview}
+\label{subsec:dataset_overview}
+
+The KITTI-360 dataset~\cite{liao2022kitti360} is a large-scale outdoor dataset for autonomous driving research, extending the original KITTI benchmark~\cite{geiger2012are} with richer annotations including dense semantic and instance segmentation, 3D bounding boxes, and accumulated point clouds. The dataset was captured in suburban areas of Karlsruhe, Germany, using a Volkswagen station wagon equipped with:
+\begin{itemize}
+    \item Two high-resolution color cameras (stereo),
+    \item A Velodyne HDL-64E 3D laser scanner,
+    \item An OXTS RT3003 GPS/IMU localization unit.
+\end{itemize}
+
+For this work, we use the front-facing camera (camera~00) images and corresponding semantic segmentation annotations. The dataset is split into 9 driving sequences covering a total of approximately 73,000 frames.
+
+\subsection{Semantic Annotations}
+\label{subsec:semantic_annotations}
+
+The semantic annotations use 19 training classes consistent with the Cityscapes label definition~\cite{cordts2016cityscapes}. Raw KITTI-360 label IDs are remapped to continuous training IDs (0--18) using the official \texttt{kitti360scripts} library. Table~\ref{tab:kitti360_classes} lists the semantic classes used.
+
+\begin{table}[t]
+    \centering
+    \caption{KITTI-360 semantic classes with training IDs used in this work}
+    \label{tab:kitti360_classes}
+    \begin{tabular}{clcl}
+        \toprule
+        \textbf{Train ID} & \textbf{Class} & \textbf{Train ID} & \textbf{Class} \\
+        \midrule
+        0  & Road         & 10 & Sky \\
+        1  & Sidewalk     & 11 & Person \\
+        2  & Building     & 12 & Rider \\
+        3  & Wall         & 13 & Car \\
+        4  & Fence        & 14 & Truck \\
+        5  & Pole         & 15 & Bus \\
+        6  & Traffic Light & 16 & Train \\
+        7  & Traffic Sign & 17 & Motorcycle \\
+        8  & Vegetation   & 18 & Bicycle \\
+        9  & Terrain      &    & \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\subsection{Data Preparation}
+\label{subsec:data_preparation}
+
+The official train/validation split files (\texttt{2013\_05\_28\_drive\_train\_frames.txt} and \texttt{2013\_05\_28\_drive\_val\_frames.txt}) define paired RGB and semantic paths. Each pair specifies an RGB image from \texttt{data\_2d\_raw/} and its corresponding semantic label map from \texttt{data\_2d\_semantics/train/}.
+
+Key preprocessing steps:
+\begin{itemize}
+    \item \textbf{Resolution:} Images are resized from the original $376 \times 1408$ to $192 \times 704$ using bilinear interpolation for RGB and nearest-neighbor interpolation for semantic maps (to preserve discrete labels).
+    \item \textbf{Clip Formation:} Consecutive frames are grouped into clips of $T=25$ frames for diffusion training and $T=4$ frames for Semantic VAE training.
+    \item \textbf{Normalization:} RGB images are normalized to $[-1, 1]$; semantic labels remain as integer IDs.
+\end{itemize}
+
+The training set contains approximately 49,000 frame pairs. For Semantic VAE training, a subset of 500 clips (2,000 frames at $T=4$) is used due to the small number of trainable parameters, with 200 clips reserved for validation.
+
+% -----------------------------------------------------------------
+\section{Evaluation Metrics}
+\label{sec:metrics}
+
+\subsection{Fr\'echet Inception Distance (FID)}
+\label{subsec:fid}
+
+The Fr\'echet Inception Distance (FID)~\cite{heusel2017gans} measures the similarity between the distributions of generated and real images in the feature space of an Inception-v3 network~\cite{szegedy2016rethinking}. Given multivariate Gaussian fits $\mathcal{N}(\boldsymbol{\mu}_r, \boldsymbol{\Sigma}_r)$ and $\mathcal{N}(\boldsymbol{\mu}_g, \boldsymbol{\Sigma}_g)$ to the real and generated feature distributions respectively:
+\begin{align}
+    \text{FID} = \|\boldsymbol{\mu}_r - \boldsymbol{\mu}_g\|^2 + \text{Tr}\!\left(\boldsymbol{\Sigma}_r + \boldsymbol{\Sigma}_g - 2\left(\boldsymbol{\Sigma}_r \boldsymbol{\Sigma}_g\right)^{1/2}\right).
+    \label{eq:fid}
+\end{align}
+Lower FID scores indicate higher similarity between generated and real image distributions. FID is computed on individual frames extracted from generated and ground-truth videos.
+
+\subsection{Fr\'echet Video Distance (FVD)}
+\label{subsec:fvd}
+
+The Fr\'echet Video Distance (FVD)~\cite{unterthiner2019fvd} extends FID to the video domain by using features from an Inflated 3D ConvNet (I3D)~\cite{carreira2017quo} pretrained on Kinetics-400. The I3D network captures both spatial appearance and temporal dynamics:
+\begin{align}
+    \text{FVD} = \|\boldsymbol{\mu}_r^{\text{I3D}} - \boldsymbol{\mu}_g^{\text{I3D}}\|^2 + \text{Tr}\!\left(\boldsymbol{\Sigma}_r^{\text{I3D}} + \boldsymbol{\Sigma}_g^{\text{I3D}} - 2\left(\boldsymbol{\Sigma}_r^{\text{I3D}} \boldsymbol{\Sigma}_g^{\text{I3D}}\right)^{1/2}\right).
+    \label{eq:fvd}
+\end{align}
+FVD evaluates both the visual quality and temporal coherence of generated videos. Lower values are better.
+
+\subsection{Mean Intersection-over-Union (mIoU)}
+\label{subsec:miou}
+
+For evaluating the Semantic VAE, the Mean Intersection-over-Union is the primary metric. For a given class $c$:
+\begin{align}
+    \text{IoU}_c = \frac{|\mathcal{P}_c \cap \mathcal{T}_c|}{|\mathcal{P}_c \cup \mathcal{T}_c|} = \frac{\text{TP}_c}{\text{TP}_c + \text{FP}_c + \text{FN}_c},
+    \label{eq:iou}
+\end{align}
+where $\mathcal{P}_c$ and $\mathcal{T}_c$ are the sets of pixels predicted and labeled as class $c$, respectively. The mean IoU averages over all valid classes:
+\begin{align}
+    \text{mIoU} = \frac{1}{|\mathcal{C}_{\text{valid}}|} \sum_{c \in \mathcal{C}_{\text{valid}}} \text{IoU}_c.
+    \label{eq:miou}
+\end{align}
+Unlike pixel accuracy, mIoU treats all classes equally regardless of their spatial prevalence, making it sensitive to performance on rare classes such as poles and traffic signs.
+
+\subsection{Additional Video Quality Metrics}
+\label{subsec:additional_metrics}
+
+In addition to FID and FVD, we report several complementary metrics:
+
+\begin{itemize}
+    \item \textbf{LPIPS} (Learned Perceptual Image Patch Similarity)~\cite{zhang2018unreasonable}: Measures perceptual distance between image pairs using deep features. Lower is better.
+    \item \textbf{SSIM} (Structural Similarity Index): Evaluates structural similarity between generated and ground-truth frames, considering luminance, contrast, and structure. Higher is better, with a maximum of 1.0.
+    \item \textbf{PSNR} (Peak Signal-to-Noise Ratio): Measures pixel-level reconstruction quality in decibels. Higher values indicate less distortion.
+\end{itemize}
+
+% -----------------------------------------------------------------
+\section{Model Architecture}
+\label{sec:architecture}
+
+\subsection{Overview of the Two-Stage Pipeline}
+\label{subsec:pipeline_overview}
+
+The proposed pipeline, illustrated in Figure~\ref{fig:pipeline_overview}, consists of three components:
+
+\begin{enumerate}
+    \item \textbf{Semantic VAE} (pretrained, frozen during diffusion training): Encodes semantic label maps into and decodes them from the latent space shared with the RGB VAE.
+    \item \textbf{Stage~1 --- Semantic Prediction Model:} A diffusion model that predicts future semantic video latents given an initial RGB frame.
+    \item \textbf{Stage~2 --- Semantic-to-Video Model:} A ControlNet-conditioned diffusion model that generates RGB video latents conditioned on semantic video latents.
+\end{enumerate}
+
+\begin{figure}[t]
+    \centering
+    % TODO: Replace with actual pipeline diagram
+    \fbox{\parbox{0.9\textwidth}{\centering\vspace{3cm}\textbf{[Pipeline Overview Diagram]}\\\textit{Two-stage pipeline: Semantic VAE + Stage~1 Semantic Prediction + Stage~2 Semantic-to-Video}\vspace{3cm}}}
+    \caption{Overview of the proposed two-stage pipeline for semantically controlled video generation. The Semantic VAE bridges discrete semantic maps and continuous latent space. Stage~1 predicts future semantic sequences. Stage~2 generates photorealistic RGB video conditioned on the predicted semantics.}
+    \label{fig:pipeline_overview}
+\end{figure}
+
+\subsection{Semantic-Native VAE}
+\label{subsec:semantic_native_vae}
+
+The Semantic-Native VAE is designed to encode discrete semantic label maps into the same latent space as the pretrained SVD VAE, without the information loss caused by mapping through 3-channel RGB. The architecture is shown in Figure~\ref{fig:semantic_vae_arch}.
+
+\begin{figure}[t]
+    \centering
+    % TODO: Replace with actual architecture diagram
+    \fbox{\parbox{0.9\textwidth}{\centering\vspace{3cm}\textbf{[Semantic-Native VAE Architecture Diagram]}\\\textit{Semantic IDs $\rightarrow$ One-hot $\rightarrow$ Stem (19$\rightarrow$128) $\rightarrow$ Frozen VAE Core $\rightarrow$ Head (128$\rightarrow$19)}\vspace{3cm}}}
+    \caption{Architecture of the Semantic-Native VAE. The trainable Semantic Stem and Head (shown in blue) interface with the frozen VAE encoder and decoder cores (shown in gray), bypassing the original RGB input/output convolutions.}
+    \label{fig:semantic_vae_arch}
+\end{figure}
+
+\paragraph{Input Encoding.}
+Given semantic label maps $\mathbf{y} \in \{0, \ldots, C-1\}^{B \times T \times H \times W}$ with $C = 19$ classes, the input is first one-hot encoded:
+\begin{align}
+    \mathbf{x}_{\text{oh}} = \text{OneHot}(\mathbf{y}) \in \{0, 1\}^{BT \times C \times H \times W}.
+    \label{eq:onehot}
+\end{align}
+Pixels with the ignore index (255, used for unlabeled regions) are clamped to class 0 during encoding and masked in the loss computation.
+
+\paragraph{Semantic Stem.}
+The stem converts the one-hot encoding to the 128-channel feature space that the VAE encoder core expects:
+\begin{align}
+    \text{Stem}(\mathbf{x}_{\text{oh}}) &= \text{Conv}_{3 \times 3}^{64 \rightarrow 128}\!\left(\text{SiLU}\!\left(\text{GN}_8\!\left(\text{Conv}_{3 \times 3}^{19 \rightarrow 64}(\mathbf{x}_{\text{oh}})\right)\right)\right),
+    \label{eq:stem}
+\end{align}
+where $\text{GN}_8$ denotes Group Normalization~\cite{wu2018group} with 8 groups and $\text{SiLU}(x) = x \cdot \sigma(x)$ is the Sigmoid Linear Unit activation. Both convolutions use $3 \times 3$ kernels with padding 1. Weights are initialized with Kaiming normal initialization.
+
+\paragraph{VAE Encoder Core (Frozen).}
+The frozen encoder core processes the 128-channel stem output through:
+\begin{itemize}
+    \item Four downsampling blocks with residual connections and self-attention,
+    \item A mid-block with self-attention,
+    \item Group normalization, SiLU activation, and a final convolution to produce 8-channel output (4 channels for mean $\boldsymbol{\mu}$ and 4 for log-variance $\log \boldsymbol{\sigma}^2$).
+\end{itemize}
+The latent code $\mathbf{z} = \boldsymbol{\mu}$ (mode) is used for deterministic encoding, producing $\mathbf{z} \in \mathbb{R}^{4 \times H/8 \times W/8}$.
+
+\paragraph{VAE Decoder Core (Frozen).}
+The frozen decoder core maps latent codes back to 128-channel features through upsampling blocks with temporal (3D) convolutions and self-attention. Each frame is decoded independently with $T_{\text{dec}}=1$ to produce features $\mathbf{h}_{\text{dec}} \in \mathbb{R}^{128 \times H \times W}$. Features are captured before the original RGB output convolution using forward hooks, which allows gradient flow through the frozen decoder back to the trainable stem.
+
+\paragraph{Semantic Head.}
+The head converts 128-channel decoder features to semantic logits using 3D convolutions for temporal consistency:
+\begin{align}
+    \text{Head}(\mathbf{h}_{\text{dec}}) &= \text{Conv}_{1 \times 1 \times 1}^{64 \rightarrow 19}\!\left(\text{SiLU}\!\left(\text{GN}_8\!\left(\text{Conv}_{3 \times 3 \times 3}^{128 \rightarrow 64}(\mathbf{h}_{\text{dec}})\right)\right)\right).
+    \label{eq:head}
+\end{align}
+The use of 3D convolutions (with $3 \times 3 \times 3$ kernels in the first layer) allows the head to leverage temporal context for smoother predictions across frames. The final $1 \times 1 \times 1$ convolution produces per-class logits.
+
+\paragraph{Parameter Efficiency.}
+The Semantic Stem contains approximately 10,000 parameters and the Semantic Head approximately 190,000 parameters, for a total of $\sim$200,000 trainable parameters. The frozen VAE core contains $\sim$84 million parameters. This parameter-efficient design enables fast convergence with limited training data.
+
+\subsection{Stage~1: Semantic Video Prediction}
+\label{subsec:stage1}
+
+Stage~1 adapts the SVD backbone to predict semantic video sequences. The model receives:
+\begin{itemize}
+    \item $\hat{\mathbf{s}}_t \in \mathbb{R}^{T \times 4 \times h \times w}$: Noisy latent representation of the semantic video (being denoised),
+    \item $\mathbf{z}^{(0)} \in \mathbb{R}^{1 \times 4 \times h \times w}$: Latent encoding of the initial RGB frame (via the RGB VAE),
+    \item $\mathbf{c}^{(0)}$: CLIP encoding of the initial frame (for cross-attention conditioning),
+\end{itemize}
+where $h = H/8 = 24$ and $w = W/8 = 88$ at the training resolution of $192 \times 704$.
+
+The initial frame latent is padded (repeated) along the temporal dimension and concatenated with the noisy semantic latents along the channel dimension, following the SVD conditioning mechanism. The UNet predicts the noise $\boldsymbol{\epsilon}_\theta(\hat{\mathbf{s}}_t, t, \mathbf{z}^{(0)}_{\text{pad}}, \mathbf{c}^{(0)})$ and is trained with the standard diffusion objective (Equation~\ref{eq:ddpm_loss}).
+
+The encoding of semantic IDs into latent space uses the trained Semantic VAE (frozen during Stage~1 training): semantic IDs $\rightarrow$ Semantic VAE encoder $\rightarrow$ semantic latents $\mathbf{s}$.
+
+\subsection{Stage~2: Semantic-to-Video Generation}
+\label{subsec:stage2}
+
+Stage~2 generates photorealistic RGB videos conditioned on semantic maps using a ControlNet architecture~\cite{zhang2023adding} adapted to video. The model consists of:
+
+\begin{itemize}
+    \item \textbf{SVD Backbone (frozen):} Receives the initial frame latent $\mathbf{z}^{(0)}_{\text{pad}}$ concatenated with noisy RGB video latents $\hat{\mathbf{z}}_t$, plus CLIP conditioning $\mathbf{c}^{(0)}$ via cross-attention.
+    
+    \item \textbf{ControlNet (trainable):} A copy of the SVD encoder blocks that receives the same noisy latents plus the semantic latents $\mathbf{s}$ (encoded by the Semantic VAE). The ControlNet output is injected into the SVD decoder via zero-initialized convolutions.
+\end{itemize}
+
+The training objective for Stage~2 is:
+\begin{align}
+    \mathcal{L}_{\text{Stage2}} = \mathbb{E}_{t, \mathbf{z}_0, \boldsymbol{\epsilon}}\!\left[\left\|\boldsymbol{\epsilon} - \boldsymbol{\epsilon}_{\theta,\xi}(\hat{\mathbf{z}}_t, t, \mathbf{z}^{(0)}_{\text{pad}}, \mathbf{c}^{(0)}, \mathbf{s})\right\|^2\right],
+    \label{eq:stage2_loss}
+\end{align}
+where $\theta$ (SVD UNet) is frozen and only $\xi$ (ControlNet) is updated.
+
+During training, ground-truth semantic labels are used as conditioning (encoded via the Semantic VAE). This allows Stage~2 to be trained in parallel with Stage~1, since it does not depend on Stage~1 predictions. During inference, the semantic maps predicted by Stage~1 are used instead.
+
+% -----------------------------------------------------------------
+\section{Loss Functions}
+\label{sec:losses}
+
+\subsection{Semantic VAE Losses}
+\label{subsec:vae_losses}
+
+The Semantic VAE is trained with a combination of boundary-weighted cross-entropy and Dice loss.
+
+\paragraph{Boundary-Weighted Cross-Entropy.}
+Standard cross-entropy treats all pixels equally, which causes the model to focus on large homogeneous regions while neglecting thin structures (e.g., poles) and class boundaries. We introduce pixel-wise weights based on a boundary mask:
+\begin{align}
+    \mathcal{L}_{\text{CE}} = \frac{\sum_{i \in \mathcal{V}} w_i \cdot \ell_{\text{CE}}(\mathbf{x}_i, y_i)}{\sum_{i \in \mathcal{V}} w_i}, \quad w_i = 1 + \alpha \cdot b_i,
+    \label{eq:bce_loss}
+\end{align}
+where $\ell_{\text{CE}}(\mathbf{x}_i, y_i) = -\log p_{y_i}(\mathbf{x}_i)$ is the per-pixel cross-entropy, $b_i \in \{0, 1\}$ is the boundary mask, $\alpha$ is the boundary emphasis factor, and $\mathcal{V}$ is the set of valid (non-ignored) pixels.
+
+The boundary mask is computed via max-min pooling with a $3 \times 3$ kernel:
+\begin{align}
+    b_i = \begin{cases} 1 & \text{if } \max_{j \in \mathcal{N}(i)} y_j \neq \min_{j \in \mathcal{N}(i)} y_j, \\ 0 & \text{otherwise,}\end{cases}
+    \label{eq:boundary_mask}
+\end{align}
+where $\mathcal{N}(i)$ is the $3 \times 3$ neighborhood of pixel $i$. This efficiently identifies pixels at class transitions. With $\alpha = 4.0$, boundary pixels receive $5\times$ the loss weight of interior pixels.
+
+\paragraph{Dice Loss.}
+To address class imbalance---vegetation may have over $1{,}000\times$ more pixels than traffic signs---we employ the soft Dice loss~\cite{milletari2016vnet}:
+\begin{align}
+    \mathcal{L}_{\text{Dice}} = 1 - \frac{1}{C} \sum_{c=1}^{C} \frac{2 \sum_i p_{i,c} \cdot t_{i,c} + \epsilon}{\sum_i p_{i,c} + \sum_i t_{i,c} + \epsilon},
+    \label{eq:dice_loss}
+\end{align}
+where $p_{i,c} = \text{softmax}(\mathbf{x}_i)_c$ is the predicted probability for class $c$ at pixel $i$, $t_{i,c}$ is the one-hot ground truth, and $\epsilon = 1$ is a smoothing constant. The Dice loss computes a per-class overlap measure and averages across classes, thereby treating all classes equally regardless of their pixel count.
+
+\paragraph{Combined Loss.}
+The total loss for Semantic VAE training is:
+\begin{align}
+    \mathcal{L}_{\text{VAE}} = \mathcal{L}_{\text{CE}} + \lambda_{\text{Dice}} \cdot \mathcal{L}_{\text{Dice}},
+    \label{eq:total_vae_loss}
+\end{align}
+where $\lambda_{\text{Dice}} = 0.5$ balances the two objectives.
+
+\subsection{Diffusion Training Losses}
+\label{subsec:diffusion_losses}
+
+Both Stage~1 and Stage~2 use the standard diffusion denoising objective with EDM noise scheduling~\cite{karras2022elucidating}. The loss is a weighted mean-squared error between the predicted and actual noise:
+\begin{align}
+    \mathcal{L}_{\text{diffusion}} = \mathbb{E}_{t \sim p(t), \boldsymbol{\epsilon} \sim \mathcal{N}(\mathbf{0}, \mathbf{I})}\!\left[w(t) \cdot \left\|\boldsymbol{\epsilon} - \boldsymbol{\epsilon}_\theta(\mathbf{x}_t, t, \mathbf{c})\right\|^2\right],
+    \label{eq:diffusion_loss}
+\end{align}
+where $w(t)$ is a time-dependent weighting function defined by the EDM schedule and $\mathbf{c}$ represents the conditioning inputs (initial frame, CLIP embedding, and---for Stage~2---semantic latents).

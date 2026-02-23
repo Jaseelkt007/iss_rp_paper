@@ -1,0 +1,63 @@
+% =================================================================
+% CHAPTER 1: INTRODUCTION
+% =================================================================
+\chapter{Introduction}
+\label{ch:introduction}
+
+\section{Motivation}
+\label{sec:motivation}
+
+The development and validation of autonomous driving systems requires vast quantities of diverse and accurately annotated video data. Real-world data collection is expensive, time-consuming, and inherently limited in its ability to capture rare but safety-critical scenarios such as pedestrian crossings, adverse weather conditions, and unusual traffic configurations. Synthetic data generation has therefore emerged as a complementary strategy that can provide virtually unlimited, perfectly labeled training data for perception, planning, and prediction modules in self-driving stacks~\cite{li2023drivingdiffusion, hu2023gaia}.
+
+Traditional approaches to synthetic driving data rely on game engines or dedicated simulation platforms. While these methods provide high controllability, they suffer from a persistent \emph{domain gap} between rendered and real imagery. Recent advances in generative modeling---particularly diffusion-based methods~\cite{ho2020denoising, rombach2022highresolution}---have opened a promising alternative: learning the distribution of real driving videos directly from data and then sampling new, photorealistic sequences from the learned model.
+
+A key challenge in this paradigm is \emph{controllability}. Unconditional or text-conditioned video diffusion models can produce visually plausible driving clips, but they offer no mechanism to specify the precise layout of the scene, the trajectories of vehicles, or the spatial arrangement of static elements such as roads, buildings, and vegetation. For autonomous driving applications, the ability to prescribe the semantic layout of every frame is essential---it allows researchers to systematically vary scene composition, test edge cases, and generate ground-truth annotations automatically.
+
+Semantic segmentation maps provide a natural control signal for this purpose. A semantic map assigns each pixel a class label (e.g., road, car, building, sky), thereby offering a dense, interpretable, and spatially precise description of the scene. If a generative model can faithfully translate a sequence of semantic maps into a photorealistic video, then full control over the generated scene is achieved simply by specifying or predicting the semantic maps.
+
+This thesis addresses exactly this problem: \emph{how to generate controllable, high-fidelity driving videos conditioned on semantic segmentation maps, using latent video diffusion models.}
+
+\section{Research Objectives}
+\label{sec:objectives}
+
+The primary objective of this work is to design, implement, and evaluate a two-stage pipeline for semantically controlled video generation in the autonomous driving domain. The specific research objectives are:
+
+\begin{enumerate}
+    \item \textbf{Semantic VAE Design:} Develop a Variational Autoencoder (VAE) capable of encoding discrete semantic segmentation maps into the continuous latent space of a pretrained video diffusion model, while preserving class boundaries and semantic fidelity.
+    
+    \item \textbf{Stage~1 --- Semantic Video Prediction:} Train a diffusion model that, given an initial RGB frame, predicts future semantic segmentation video sequences.
+    
+    \item \textbf{Stage~2 --- Semantic-to-Video Generation:} Train a ControlNet-conditioned video diffusion model that generates photorealistic RGB driving videos guided by the semantic maps produced in Stage~1.
+    
+    \item \textbf{Evaluation:} Quantitatively assess the pipeline using standard metrics including Fr\'echet Inception Distance (FID), Fr\'echet Video Distance (FVD), and Mean Intersection-over-Union (mIoU), and compare with related approaches.
+\end{enumerate}
+
+\section{Contributions}
+\label{sec:contributions}
+
+The main contributions of this thesis are:
+
+\begin{itemize}
+    \item A \textbf{Semantic-Native VAE} architecture that bypasses the RGB bottleneck of pretrained image VAEs by introducing trainable semantic stem and head modules around a frozen Stable Video Diffusion VAE core. The proposed model achieves 89.7\% mIoU on KITTI-360 validation data with only $\sim$200K trainable parameters.
+    
+    \item A \textbf{boundary-weighted cross-entropy loss} combined with a \textbf{Dice loss} for training the Semantic VAE, which addresses the critical problem of boundary degradation and class imbalance in semantic reconstruction.
+    
+    \item A complete \textbf{two-stage diffusion pipeline} for semantically controlled video generation, adapted from the Ctrl-V framework~\cite{luo2025ctrlv}, where bounding-box conditioning is replaced by dense semantic map conditioning.
+    
+    \item A thorough \textbf{experimental evaluation} on the KITTI-360 dataset~\cite{liao2022kitti360}, including ablation studies on loss functions, architectural choices, and training configurations.
+\end{itemize}
+
+\section{Thesis Outline}
+\label{sec:outline}
+
+The remainder of this thesis is organized as follows:
+
+\textbf{Chapter~\ref{ch:related_work} -- Related Work} reviews the theoretical foundations and prior art in diffusion models, variational autoencoders, video generation, and controllable synthesis. Mathematical formulations of the key concepts are provided.
+
+\textbf{Chapter~\ref{ch:methodology} -- Methodology} describes the dataset, evaluation metrics, the proposed Semantic VAE architecture, the two-stage diffusion pipeline, and the loss functions used for training.
+
+\textbf{Chapter~\ref{ch:experiments} -- Experiments} presents the implementation details, hyperparameter configurations, quantitative results, ablation studies, and comparisons with baseline methods.
+
+\textbf{Chapter~\ref{ch:discussion} -- Discussion} analyzes the experimental results, discusses training instabilities, limitations of evaluation metrics, and compares the proposed approach with related work.
+
+\textbf{Chapter~\ref{ch:summary} -- Summary} concludes the thesis and outlines directions for future work.

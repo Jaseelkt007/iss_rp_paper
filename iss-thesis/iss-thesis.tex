@@ -70,8 +70,8 @@
 % Language: 
 % affects generic titles, Figure term, titlepage and bibliography
 % (Note:if you switch the language, compile tex and bib >2 times)
-%\def \doclang{english} 	% For theses/reports in English
-\def \doclang{german} 		% For theses/reports in German
+\def \doclang{english} 	% For theses/reports in English
+%\def \doclang{german} 		% For theses/reports in German
 
 % Hyperref links in the document:
 \def \colortype{color} % links with colored text
@@ -85,16 +85,16 @@
 % --------------> put student information here <------------------
 % *****************************************************************
 % Please fill in all items denoted by "to be defined (TBD)"
-\def \deworktitle{Arbeitstitel, to be defined (TBD)}        % German title/translation
-\def \enworktitle{Thesis title TBD}        % English title/translation
-\def \tutor{Supervisor's name TBD}
-\def \student{Student's name TBD}
-\def \worksubject{Masterarbeit Dxxxx TBD}  % type and number (S/Dxxxx) of your thesis
-\def \startdate{Date of work begin TBD}
-\def \submission{Date of submission TBD}
-\def \signagedate{TBD Date of sign.}   % Date of signature of declaration on last page
-\def \keywords{Keyword1, Keyword2 TBD}
-\def \abstract{Abstract TBD}
+\def \deworktitle{Semantisch gesteuerte Videogenerierung f\"ur autonomes Fahren mittels latenter Diffusionsmodelle}        % German title/translation
+\def \enworktitle{Semantically Controlled Video Generation for Autonomous Driving using Latent Diffusion Models}        % English title/translation
+\def \tutor{Khaled Seyam}
+\def \student{Mohammed Jaseel Kunnathodika}
+\def \worksubject{Master Thesis}  % type and number (S/Dxxxx) of your thesis
+\def \startdate{01.09.2025}
+\def \submission{28.02.2026}
+\def \signagedate{28.02.2026}   % Date of signature of declaration on last page
+\def \keywords{Video Generation, Diffusion Models, Semantic Segmentation, Autonomous Driving, Variational Autoencoder, ControlNet, KITTI-360}
+\def \abstract{This thesis presents a two-stage pipeline for controllable video generation of autonomous driving scenes, where semantic segmentation maps serve as the control signal. In the first stage, a diffusion model predicts future semantic video sequences from an initial RGB frame. In the second stage, a ControlNet-conditioned video diffusion model generates photorealistic RGB videos guided by the predicted semantic maps. A central contribution is the design and training of a Semantic-Native Variational Autoencoder (VAE) that encodes discrete semantic label maps into the continuous latent space of a pretrained Stable Video Diffusion model, achieving 89.7\% mean Intersection-over-Union on KITTI-360 validation data. The full pipeline is trained and evaluated on the KITTI-360 dataset, yielding a Fr\'echet Inception Distance of 35.74 and a Fr\'echet Video Distance of 392.10. The results demonstrate that semantic control provides a viable and interpretable mechanism for generating realistic synthetic driving video data.}
 
 % *****************************************************************
 %
@@ -278,62 +278,60 @@ Pro-gramm-aus-schnitt Mi-kro-fon-sig-nal}
 % *****************************************************************
 % -------------------> start writing here <------------------------
 
-\chapter{Introduction}
-\section{Explanations}
-As shown in \cite{C2}, we present an equation
-\begin{align}
-	H(\omega) = \int h(t) \e{\im\omega t} \delta t \in \N
-\end{align}
+\input{chapters/ch1_introduction}
+\input{chapters/ch2_related_work}
+\input{chapters/ch3_methodology}
+\input{chapters/ch4_experiments}
+\input{chapters/ch5_discussion}
+\input{chapters/ch6_summary}
 
-Then we include a graphic in figure \ref{mind} and information about captions in table \ref{captions}.\\
-\begin{figure}
-	\centering
-	\includegraphics[scale=.3]{isslogocolor}
-	\caption{A beautiful mind}
-	\label{mind}
-\end{figure}
+% =================================================================
+% APPENDIX
+% =================================================================
+\appendix
+\chapter{Acronyms}
+\label{app:acronyms}
 
-\begin{table}
+\begin{table}[h]
     \centering
-    \caption{Where to put the caption}
-    \label{captions}
-    \begin{tabular}{lcc}
+    \begin{tabular}{ll}
         \toprule
-         & above & below\\
+        \textbf{Acronym} & \textbf{Full Form} \\
         \midrule
-        for figures & no & yes\\
-        for tables & yes & no\\
+        AV & Autonomous Vehicle \\
+        BBox & Bounding Box \\
+        CE & Cross-Entropy \\
+        CFG & Classifier-Free Guidance \\
+        CLIP & Contrastive Language-Image Pre-training \\
+        CNN & Convolutional Neural Network \\
+        DDPM & Denoising Diffusion Probabilistic Model \\
+        EDM & Elucidating the Design space of Diffusion Models \\
+        ELBO & Evidence Lower Bound \\
+        FID & Fr\'echet Inception Distance \\
+        FP16 & 16-bit Floating Point (Half Precision) \\
+        FVD & Fr\'echet Video Distance \\
+        GAN & Generative Adversarial Network \\
+        GN & Group Normalization \\
+        GPU & Graphics Processing Unit \\
+        I2V & Image-to-Video \\
+        I3D & Inflated 3D ConvNet \\
+        IoU & Intersection-over-Union \\
+        KL & Kullback--Leibler \\
+        LDM & Latent Diffusion Model \\
+        LPIPS & Learned Perceptual Image Patch Similarity \\
+        mIoU & Mean Intersection-over-Union \\
+        ODE & Ordinary Differential Equation \\
+        PSNR & Peak Signal-to-Noise Ratio \\
+        SDE & Stochastic Differential Equation \\
+        SiLU & Sigmoid Linear Unit \\
+        SSIM & Structural Similarity Index \\
+        SVD & Stable Video Diffusion \\
+        SVD-XT & Stable Video Diffusion -- Extended (25 frames) \\
+        VAE & Variational Autoencoder \\
+        VRAM & Video Random Access Memory \\
         \bottomrule
     \end{tabular}
 \end{table}
-
-
-Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet. Lorem ipsum dolor sit amet, consetetur sadipscing elitr, sed diam nonumy eirmod tempor invidunt ut labore et dolore magna aliquyam erat, sed diam voluptua. At vero eos et accusam et justo duo dolores et ea rebum. Stet clita kasd gubergren, no sea takimata sanctus est Lorem ipsum dolor sit amet.
-
-\chapter{Introduction}
-\section{Motivation}
-Your motivation content here...
-
-\section{Research Objectives and Thesis Outline}
-Your research objectives and outline here...
-
-\chapter{Related Work}
-Your related work content here...
-
-\chapter{Methodology}
-Your methodology content here...
-
-\chapter{Experiments}
-Your experiments content here...
-
-\chapter{Discussion}
-\section{Experimental Results}
-Your experimental results here...
-
-\appendix
-\chapter{Additionally}
-You may do an appendix
-
 
 
 % -------------------> end writing here <------------------------

@@ -1,0 +1,271 @@
+% =================================================================
+% CHAPTER 2: RELATED WORK
+% =================================================================
+\chapter{Related Work}
+\label{ch:related_work}
+
+This chapter provides the theoretical background and reviews the state of the art in the areas relevant to this thesis: diffusion models, variational autoencoders, video generation, and controllable synthesis.
+
+% -----------------------------------------------------------------
+\section{Diffusion Models}
+\label{sec:diffusion_models}
+
+\subsection{Denoising Diffusion Probabilistic Models}
+\label{subsec:ddpm}
+
+Diffusion models are a class of generative models that learn to reverse a gradual noising process. The foundational framework was introduced by Sohl-Dickstein et al.~\cite{sohldickstein2015deep} and significantly advanced by Ho et al.~\cite{ho2020denoising} with Denoising Diffusion Probabilistic Models (DDPMs).
+
+\paragraph{Forward Process.}
+The forward (diffusion) process gradually adds Gaussian noise to a data sample $\mathbf{x}_0 \sim q(\mathbf{x}_0)$ over $T$ steps according to a variance schedule $\{\beta_t\}_{t=1}^T$:
+\begin{align}
+    q(\mathbf{x}_t | \mathbf{x}_{t-1}) &= \mathcal{N}\!\left(\mathbf{x}_t;\, \sqrt{1-\beta_t}\,\mathbf{x}_{t-1},\, \beta_t \mathbf{I}\right).
+    \label{eq:forward_step}
+\end{align}
+Defining $\alpha_t = 1 - \beta_t$ and $\bar{\alpha}_t = \prod_{s=1}^{t} \alpha_s$, the noisy sample at any time step $t$ can be expressed in closed form:
+\begin{align}
+    q(\mathbf{x}_t | \mathbf{x}_0) &= \mathcal{N}\!\left(\mathbf{x}_t;\, \sqrt{\bar{\alpha}_t}\,\mathbf{x}_0,\, (1-\bar{\alpha}_t)\,\mathbf{I}\right),
+    \label{eq:forward_closed}
+\end{align}
+which allows direct sampling: $\mathbf{x}_t = \sqrt{\bar{\alpha}_t}\,\mathbf{x}_0 + \sqrt{1-\bar{\alpha}_t}\,\boldsymbol{\epsilon}$ where $\boldsymbol{\epsilon} \sim \mathcal{N}(\mathbf{0}, \mathbf{I})$.
+
+\paragraph{Reverse Process.}
+The generative (reverse) process learns to denoise, starting from $\mathbf{x}_T \sim \mathcal{N}(\mathbf{0}, \mathbf{I})$:
+\begin{align}
+    p_\theta(\mathbf{x}_{t-1} | \mathbf{x}_t) &= \mathcal{N}\!\left(\mathbf{x}_{t-1};\, \boldsymbol{\mu}_\theta(\mathbf{x}_t, t),\, \sigma_t^2 \mathbf{I}\right).
+    \label{eq:reverse}
+\end{align}
+Ho et al.~\cite{ho2020denoising} showed that parameterizing the model to predict the noise $\boldsymbol{\epsilon}_\theta(\mathbf{x}_t, t)$ rather than the mean directly leads to a simplified training objective:
+\begin{align}
+    \mathcal{L}_{\text{simple}} &= \mathbb{E}_{t, \mathbf{x}_0, \boldsymbol{\epsilon}}\!\left[\left\|\boldsymbol{\epsilon} - \boldsymbol{\epsilon}_\theta(\mathbf{x}_t, t)\right\|^2\right].
+    \label{eq:ddpm_loss}
+\end{align}
+
+\paragraph{Score-Based Interpretation.}
+Song et al.~\cite{song2021scorebased} unified DDPMs with score matching by viewing the forward process as a continuous-time stochastic differential equation (SDE). The reverse-time SDE is:
+\begin{align}
+    d\mathbf{x} = \left[\mathbf{f}(\mathbf{x},t) - g(t)^2 \nabla_{\mathbf{x}} \log p_t(\mathbf{x})\right] dt + g(t)\, d\bar{\mathbf{w}},
+    \label{eq:reverse_sde}
+\end{align}
+where $\nabla_{\mathbf{x}} \log p_t(\mathbf{x})$ is the \emph{score function}, approximated by the neural network. This formulation enables flexible sampling strategies, including deterministic ODE solvers.
+
+Subsequent improvements by Nichol and Dhariwal~\cite{nichol2021improved} introduced learned variance schedules and importance-weighted training, while Dhariwal and Nichol~\cite{dhariwal2021diffusion} demonstrated that diffusion models can surpass GANs~\cite{goodfellow2014generative} in image generation quality when combined with classifier guidance.
+
+\subsection{Classifier-Free Guidance}
+\label{subsec:cfg}
+
+Ho and Salimans~\cite{ho2022classifierfree} proposed \emph{classifier-free guidance} (CFG), which avoids the need for a separate classifier by jointly training conditional and unconditional models. During inference, the predicted noise is interpolated:
+\begin{align}
+    \tilde{\boldsymbol{\epsilon}}_\theta(\mathbf{x}_t, t, \mathbf{c}) = (1 + w)\,\boldsymbol{\epsilon}_\theta(\mathbf{x}_t, t, \mathbf{c}) - w\,\boldsymbol{\epsilon}_\theta(\mathbf{x}_t, t, \varnothing),
+    \label{eq:cfg}
+\end{align}
+where $w > 0$ is the guidance scale and $\varnothing$ denotes the null condition (obtained by randomly dropping the conditioning during training). Higher values of $w$ increase adherence to the condition at the expense of sample diversity. CFG is widely used in modern diffusion models including Stable Diffusion and Stable Video Diffusion.
+
+% -----------------------------------------------------------------
+\section{Latent Diffusion Models}
+\label{sec:ldm}
+
+\subsection{Motivation and Architecture}
+\label{subsec:ldm_motivation}
+
+Running the diffusion process directly in pixel space is computationally prohibitive for high-resolution images and videos. Rombach et al.~\cite{rombach2022highresolution} addressed this by introducing \emph{Latent Diffusion Models} (LDMs), which operate in a compressed latent space learned by a VAE.
+
+The LDM framework consists of two stages:
+\begin{enumerate}
+    \item \textbf{Perceptual Compression:} A VAE with encoder $\mathcal{E}$ and decoder $\mathcal{D}$ is trained to map images $\mathbf{x} \in \mathbb{R}^{H \times W \times 3}$ to latents $\mathbf{z} = \mathcal{E}(\mathbf{x}) \in \mathbb{R}^{h \times w \times c}$ such that $\mathcal{D}(\mathcal{E}(\mathbf{x})) \approx \mathbf{x}$, with a spatial downsampling factor $f = H/h$ (typically $f=8$).
+    
+    \item \textbf{Latent Diffusion:} The forward and reverse diffusion processes of Equations~\eqref{eq:forward_step}--\eqref{eq:ddpm_loss} are applied in the latent space $\mathbf{z}$ rather than the pixel space $\mathbf{x}$.
+\end{enumerate}
+
+The denoising network is a UNet~\cite{ronneberger2015unet} with cross-attention layers~\cite{vaswani2017attention} that can incorporate conditioning information (text embeddings, class labels, spatial maps) via:
+\begin{align}
+    \text{Attention}(\mathbf{Q}, \mathbf{K}, \mathbf{V}) = \text{softmax}\!\left(\frac{\mathbf{Q}\mathbf{K}^\top}{\sqrt{d}}\right)\mathbf{V},
+    \label{eq:cross_attention}
+\end{align}
+where $\mathbf{Q}$ is projected from the intermediate UNet features and $\mathbf{K}, \mathbf{V}$ from the conditioning signal. This architecture forms the backbone of Stable Diffusion~\cite{rombach2022highresolution} and its video extensions.
+
+\subsection{EDM Noise Scheduling}
+\label{subsec:edm}
+
+Karras et al.~\cite{karras2022elucidating} proposed the EDM (Elucidating the Design space of Diffusion Models) framework, which reparameterizes the noise schedule using a continuous noise level $\sigma$. The noisy sample is expressed as:
+\begin{align}
+    \mathbf{x}_\sigma = \mathbf{x}_0 + \sigma\,\boldsymbol{\epsilon}, \quad \boldsymbol{\epsilon} \sim \mathcal{N}(\mathbf{0}, \mathbf{I}).
+    \label{eq:edm_noise}
+\end{align}
+The denoiser is parameterized to predict a combination of the input and estimated clean signal via preconditioning functions $c_{\text{skip}}(\sigma)$, $c_{\text{out}}(\sigma)$, $c_{\text{in}}(\sigma)$, and $c_{\text{noise}}(\sigma)$:
+\begin{align}
+    D_\theta(\mathbf{x}_\sigma; \sigma) = c_{\text{skip}}(\sigma)\,\mathbf{x}_\sigma + c_{\text{out}}(\sigma)\,F_\theta\!\left(c_{\text{in}}(\sigma)\,\mathbf{x}_\sigma;\, c_{\text{noise}}(\sigma)\right),
+    \label{eq:edm_denoiser}
+\end{align}
+where $F_\theta$ is the neural network. This formulation is adopted by Stable Video Diffusion~\cite{blattmann2023stable} and consequently by the Ctrl-V framework~\cite{luo2025ctrlv} used in this work.
+
+% -----------------------------------------------------------------
+\section{Variational Autoencoders}
+\label{sec:vae}
+
+\subsection{Theoretical Foundation}
+\label{subsec:vae_theory}
+
+The Variational Autoencoder (VAE), introduced independently by Kingma and Welling~\cite{kingma2014autoencoding} and Rezende et al.~\cite{rezende2014stochastic}, is a generative model that learns a latent representation $\mathbf{z}$ of data $\mathbf{x}$ by maximizing a variational lower bound on the log-likelihood:
+\begin{align}
+    \log p(\mathbf{x}) \geq \mathbb{E}_{q_\phi(\mathbf{z}|\mathbf{x})}\!\left[\log p_\theta(\mathbf{x}|\mathbf{z})\right] - D_{\text{KL}}\!\left(q_\phi(\mathbf{z}|\mathbf{x}) \| p(\mathbf{z})\right) = \mathcal{L}_{\text{ELBO}},
+    \label{eq:elbo}
+\end{align}
+where $q_\phi(\mathbf{z}|\mathbf{x}) = \mathcal{N}(\boldsymbol{\mu}_\phi(\mathbf{x}), \boldsymbol{\sigma}_\phi^2(\mathbf{x})\,\mathbf{I})$ is the approximate posterior (encoder), $p_\theta(\mathbf{x}|\mathbf{z})$ is the likelihood (decoder), and $p(\mathbf{z}) = \mathcal{N}(\mathbf{0}, \mathbf{I})$ is the prior. Training maximizes $\mathcal{L}_{\text{ELBO}}$ with respect to both encoder parameters $\phi$ and decoder parameters $\theta$.
+
+\paragraph{Reparameterization Trick.}
+To enable backpropagation through the stochastic sampling of $\mathbf{z}$, Kingma and Welling introduced the reparameterization trick:
+\begin{align}
+    \mathbf{z} = \boldsymbol{\mu}_\phi(\mathbf{x}) + \boldsymbol{\sigma}_\phi(\mathbf{x}) \odot \boldsymbol{\epsilon}, \quad \boldsymbol{\epsilon} \sim \mathcal{N}(\mathbf{0}, \mathbf{I}),
+    \label{eq:reparam}
+\end{align}
+which expresses $\mathbf{z}$ as a deterministic function of $\phi$ and the random variable $\boldsymbol{\epsilon}$.
+
+\paragraph{KL Divergence.}
+For a Gaussian approximate posterior and a standard Gaussian prior, the KL divergence admits a closed-form expression:
+\begin{align}
+    D_{\text{KL}}\!\left(q_\phi(\mathbf{z}|\mathbf{x}) \| p(\mathbf{z})\right) = -\frac{1}{2}\sum_{j=1}^{J}\left(1 + \log \sigma_j^2 - \mu_j^2 - \sigma_j^2\right),
+    \label{eq:kl_closed}
+\end{align}
+where $J$ is the dimensionality of the latent space. This term acts as a regularizer, encouraging the approximate posterior to stay close to the prior and ensuring a smooth, well-structured latent space.
+
+\subsection{VAE in Latent Diffusion Models}
+\label{subsec:vae_in_ldm}
+
+In the LDM framework~\cite{rombach2022highresolution}, the VAE serves as a perceptual compression model that maps high-dimensional images into a lower-dimensional latent space. The VAE used in Stable Diffusion employs a KL-regularized autoencoder trained with a combination of:
+\begin{itemize}
+    \item Pixel-level reconstruction loss ($L_1$ or $L_2$),
+    \item Perceptual loss (LPIPS)~\cite{zhang2018unreasonable},
+    \item Adversarial loss (patch-based discriminator),
+    \item KL divergence regularization.
+\end{itemize}
+
+The encoder produces latent codes $\mathbf{z} \in \mathbb{R}^{h \times w \times 4}$ with a spatial downsampling factor of 8, and the decoder reconstructs images from these latents. Crucially, the VAE is trained once and then frozen during diffusion model training, which means all diffusion operations occur in the fixed latent space.
+
+\subsection{3D VAE for Video}
+\label{subsec:3d_vae}
+
+Stable Video Diffusion (SVD)~\cite{blattmann2023stable} extends the image VAE to handle video sequences. The architecture uses a \textbf{2D encoder} that processes each frame independently, producing per-frame latents $\mathbf{z}^{(i)} = \mathcal{E}(\mathbf{f}^{(i)})$, and a \textbf{3D temporal decoder} that jointly decodes all frame latents while maintaining temporal coherence through 3D convolutions:
+\begin{align}
+    \mathcal{E}&: \mathbb{R}^{3 \times H \times W} \rightarrow \mathbb{R}^{4 \times \frac{H}{8} \times \frac{W}{8}}, \quad \text{(per-frame, 2D)} \label{eq:svd_enc}\\
+    \mathcal{D}&: \mathbb{R}^{T \times 4 \times \frac{H}{8} \times \frac{W}{8}} \rightarrow \mathbb{R}^{T \times 3 \times H \times W}. \quad \text{(temporal, 3D)} \label{eq:svd_dec}
+\end{align}
+
+This asymmetric design---2D encoder, 3D decoder---is a key architectural choice that enables efficient encoding while ensuring temporal smoothness in decoded video sequences. The encoder consists of residual blocks with downsampling, a mid-block with self-attention, and final convolutional layers that map from 128 internal channels to $2 \times 4 = 8$ output channels (mean and log-variance for 4 latent channels). The decoder mirrors this structure with upsampling blocks but additionally includes temporal convolutions for inter-frame coherence.
+
+\subsection{Semantic VAE}
+\label{subsec:semantic_vae}
+
+A central challenge addressed in this thesis is encoding discrete semantic segmentation maps through a VAE designed for continuous RGB images. Semantic maps consist of integer class labels (e.g., 0--18 for KITTI-360), which fundamentally differ from the smooth, continuous pixel intensities that the pretrained VAE expects.
+
+\paragraph{The RGB Bottleneck Problem.}
+A naive approach---converting semantic labels to an RGB color palette and passing through the standard VAE---suffers from an information bottleneck: 19 semantic classes must be compressed into 3 RGB channels. The VAE's learned smooth latent manifold further degrades sharp class boundaries, as the model was trained to reconstruct natural images with smooth gradients rather than discrete label maps. Experiments in Section~\ref{sec:vae_results} show that this approach achieves only 54.3\% mIoU despite 97.7\% pixel accuracy, revealing that boundaries account for a small fraction of pixels but a large fraction of errors.
+
+\paragraph{Semantic-Native Architecture.}
+To overcome this limitation, we propose a Semantic-Native VAE that bypasses the RGB input/output layers of the pretrained VAE. Instead of feeding 3-channel RGB inputs, the model introduces:
+\begin{itemize}
+    \item A \textbf{Semantic Stem} (trainable): Maps one-hot encoded semantic labels ($C=19$ channels) to the 128-channel feature space expected by the VAE encoder core.
+    \item A \textbf{Semantic Head} (trainable): Maps the 128-channel decoder output back to $C=19$ class logits, using 3D convolutions for temporal consistency.
+\end{itemize}
+
+The frozen VAE encoder and decoder cores---comprising all layers between the input convolution and output convolution---are retained unchanged. This allows the model to leverage the powerful spatial representations learned during pretraining while adapting the input and output interfaces to the semantic domain.
+
+% -----------------------------------------------------------------
+\section{Video Diffusion Models}
+\label{sec:video_diffusion}
+
+\subsection{From Image to Video Diffusion}
+\label{subsec:image_to_video}
+
+Extending diffusion models from images to videos introduces the challenge of modeling temporal dynamics in addition to spatial content. Several strategies have been proposed:
+
+\paragraph{Temporal Layers.}
+Blattmann et al.~\cite{blattmann2023align} proposed inserting temporal attention and temporal convolution layers into a pretrained 2D UNet, then finetuning only these new layers on video data. This ``inflate-and-finetune'' approach preserves the spatial knowledge of the image model while learning temporal relationships.
+
+\paragraph{Joint Space-Time Modeling.}
+Ho et al.~\cite{ho2022video} proposed Video Diffusion Models that perform diffusion jointly over all frames using 3D UNet architectures, treating the video as a 4D tensor $\mathbf{x} \in \mathbb{R}^{T \times C \times H \times W}$.
+
+\paragraph{Cascaded Models.}
+Make-A-Video~\cite{singer2023makeavideo} decomposes the problem into separate spatial and temporal components, first generating a key frame and then interpolating or extrapolating to produce the full video sequence.
+
+\subsection{Stable Video Diffusion}
+\label{subsec:svd}
+
+Stable Video Diffusion (SVD)~\cite{blattmann2023stable} is a latent video diffusion model that generates video sequences from a single conditioning image. Key design choices include:
+
+\begin{itemize}
+    \item \textbf{Architecture:} A UNet denoiser with interleaved spatial and temporal attention layers, operating on latent representations of size $T \times 4 \times H/8 \times W/8$.
+    \item \textbf{Conditioning:} The first frame $\mathbf{f}^{(0)}$ is encoded via both the VAE encoder (providing spatial conditioning through concatenation with the noisy latents) and a CLIP image encoder~\cite{radford2021learning} (providing semantic conditioning through cross-attention).
+    \item \textbf{Noise Schedule:} EDM-based scheduling~\cite{karras2022elucidating} with continuous noise levels.
+    \item \textbf{Training Data Curation:} A systematic pipeline for selecting high-quality video clips with sufficient motion, appropriate aesthetics, and minimal artifacts.
+\end{itemize}
+
+SVD operates in image-to-video (I2V) mode: given a single input image, it generates a temporally coherent video continuation. The model variant SVD-XT generates 25 frames at resolutions up to $576 \times 1024$. This pretrained model serves as the backbone for the Ctrl-V framework and, by extension, for the work presented in this thesis.
+
+\begin{figure}[t]
+    \centering
+    % TODO: Replace with actual SVD architecture diagram
+    \fbox{\parbox{0.9\textwidth}{\centering\vspace{3cm}\textbf{[SVD Architecture Diagram]}\\\textit{UNet with spatial and temporal attention blocks, VAE encoder/decoder, CLIP conditioning}\vspace{3cm}}}
+    \caption{Architecture overview of Stable Video Diffusion. The UNet denoiser operates in latent space and incorporates both spatial and temporal attention layers. The initial frame provides conditioning through both VAE-encoded latents and CLIP embeddings.}
+    \label{fig:svd_architecture}
+\end{figure}
+
+% -----------------------------------------------------------------
+\section{Controllable Video Generation}
+\label{sec:controllable}
+
+\subsection{ControlNet}
+\label{subsec:controlnet}
+
+ControlNet~\cite{zhang2023adding} is a neural network architecture for adding spatial conditioning to pretrained diffusion models. The key idea is to create a trainable copy of the encoder blocks of the UNet, which processes the conditioning signal (e.g., edge maps, depth maps, segmentation masks), and inject its output into the decoder of the original (frozen) UNet via zero-initialized convolution layers:
+\begin{align}
+    \mathbf{y}_c &= \mathcal{F}(\mathbf{x};\, \Theta) + \mathcal{Z}\!\left(\mathcal{F}(\mathbf{x} + \mathcal{Z}(\mathbf{c};\, \Theta_{z1});\, \Theta_c);\, \Theta_{z0}\right),
+    \label{eq:controlnet}
+\end{align}
+where $\mathcal{F}(\cdot;\,\Theta)$ denotes the original frozen block, $\mathcal{F}(\cdot;\,\Theta_c)$ is the trainable copy, $\mathbf{c}$ is the conditioning input, and $\mathcal{Z}(\cdot;\,\Theta_z)$ are zero-convolution layers (initialized with zero weights to ensure the model starts from the pretrained state). This design preserves the generation quality of the pretrained model at initialization while progressively learning to incorporate the conditioning signal during training.
+
+Originally designed for image diffusion, ControlNet has been adapted to video diffusion by processing each frame's condition independently and feeding the resulting features into the temporal UNet~\cite{hu2023videocontrolnet, chen2023controlavideo}.
+
+\begin{figure}[t]
+    \centering
+    % TODO: Replace with actual ControlNet diagram
+    \fbox{\parbox{0.9\textwidth}{\centering\vspace{3cm}\textbf{[ControlNet Architecture Diagram]}\\\textit{Frozen UNet + Trainable Copy with zero-convolution connections}\vspace{3cm}}}
+    \caption{ControlNet architecture. A trainable copy of the UNet encoder receives the conditioning input and injects its features into the frozen UNet decoder via zero-initialized convolution layers.}
+    \label{fig:controlnet_architecture}
+\end{figure}
+
+\subsection{Bounding-Box Control: Ctrl-V}
+\label{subsec:ctrlv}
+
+Ctrl-V~\cite{luo2025ctrlv} is a two-stage method for generating autonomous driving videos controlled by bounding box trajectories, built on SVD:
+
+\textbf{Stage~1 --- BBox Generator:} A modified SVD backbone predicts bounding box trajectories as pixel-level images. Given an initial RGB frame $\mathbf{f}^{(0)}$, initial bounding box frame $\mathbf{b}^{(0)}$, and (optionally) a final bounding box frame $\mathbf{b}^{(N-1)}$, the model generates the full bounding box video $\mathbf{b} = [\mathbf{b}^{(0)}, \ldots, \mathbf{b}^{(N-1)}]$ through the diffusion process in latent space.
+
+\textbf{Stage~2 --- Box2Video:} The SVD backbone is augmented with a ControlNet module. The ControlNet receives the predicted bounding box frames $\mathbf{b}$ (encoded by the VAE) as conditioning, while the SVD backbone receives the initial frame encoding and noisy video latents. The ControlNet output is injected into the SVD decoder via residual connections:
+\begin{align}
+    \boldsymbol{\epsilon}_\theta(\hat{\mathbf{z}}_t, t, \mathbf{z}^{(0)}, \mathbf{c}^{(0)}, \mathbf{b}) = \mathbb{U}_\theta\!\left(\hat{\mathbf{z}}_t, t, \mathbf{z}^{(0)}_{\text{pad}}, \mathbf{c}^{(0)}\right) + \text{ControlNet}_\xi(\hat{\mathbf{z}}_t, \mathbf{b}),
+    \label{eq:ctrlv_box2video}
+\end{align}
+where only the ControlNet parameters $\xi$ are trained while the SVD UNet parameters $\theta$ remain frozen.
+
+\subsection{Other Control Modalities}
+\label{subsec:other_controls}
+
+Beyond bounding boxes, various control signals have been explored for video generation:
+\begin{itemize}
+    \item \textbf{Depth and Edge Maps:} VideoControlNet~\cite{hu2023videocontrolnet} uses depth, canny edge, and optical flow as frame-level conditions.
+    \item \textbf{Motion Fields:} AnimateDiff~\cite{guo2024animatediff} incorporates motion modules that can be conditioned on motion trajectories.
+    \item \textbf{Text and Layout:} Boximator~\cite{wang2024boximator} combines text prompts with hard and soft bounding box constraints for fine-grained motion control.
+    \item \textbf{Semantic Maps:} SPADE-based methods~\cite{park2019semantic} use semantic layouts for image synthesis, but their extension to video with diffusion models remains underexplored---a gap that this thesis aims to fill.
+\end{itemize}
+
+\subsection{Driving-Specific Video Generation}
+\label{subsec:driving_generation}
+
+Several recent works target video generation for autonomous driving specifically:
+\begin{itemize}
+    \item \textbf{GAIA-1}~\cite{hu2023gaia}: A generative world model that produces driving videos from text, action, and video tokens.
+    \item \textbf{DrivingDiffusion}~\cite{li2023drivingdiffusion}: Uses layout-guided multi-view generation with latent diffusion.
+    \item \textbf{VISTA}~\cite{gao2024vista}: A generalizable driving world model with high fidelity and versatile controllability.
+\end{itemize}
+
+These works highlight the growing interest in using generative models for autonomous driving simulation. The approach in this thesis differs by using dense semantic maps as the control signal, providing pixel-level scene specification rather than sparse bounding boxes or text descriptions.
