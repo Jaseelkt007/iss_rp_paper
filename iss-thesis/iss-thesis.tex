@@ -93,8 +93,8 @@
 \def \startdate{01.09.2025}
 \def \submission{28.02.2026}
 \def \signagedate{28.02.2026}   % Date of signature of declaration on last page
-\def \keywords{Video Generation, Diffusion Models, Semantic Segmentation, Autonomous Driving, Variational Autoencoder, ControlNet, KITTI-360}
-\def \abstract{This thesis presents a two-stage pipeline for controllable video generation of autonomous driving scenes, where semantic segmentation maps serve as the control signal. In the first stage, a diffusion model predicts future semantic video sequences from an initial RGB frame. In the second stage, a ControlNet-conditioned video diffusion model generates photorealistic RGB videos guided by the predicted semantic maps. A central contribution is the design and training of a Semantic-Native Variational Autoencoder (VAE) that encodes discrete semantic label maps into the continuous latent space of a pretrained Stable Video Diffusion model, achieving 89.7\% mean Intersection-over-Union on KITTI-360 validation data. The full pipeline is trained and evaluated on the KITTI-360 dataset, yielding a Fr\'echet Inception Distance of 35.74 and a Fr\'echet Video Distance of 392.10. The results demonstrate that semantic control provides a viable and interpretable mechanism for generating realistic synthetic driving video data.}
+\def \enabstract{Generating realistic synthetic video data for autonomous driving is essential for training and validating perception systems, but traditional simulation methods suffer from a domain gap to real-world imagery. This thesis addresses this challenge by developing a semantically controlled video generation pipeline based on latent diffusion models. The approach uses semantic segmentation maps as dense control signals, enabling precise specification of scene layouts including roads, vehicles, buildings, and other elements. A key contribution is a Semantic-Native Variational Autoencoder that efficiently encodes discrete semantic labels into continuous latent representations. The two-stage diffusion pipeline first predicts future semantic sequences, then generates photorealistic RGB videos conditioned on these semantic maps. Experimental results on the KITTI-360 dataset demonstrate that the method produces high-quality driving videos with full scene controllability, offering a promising direction for scalable synthetic data generation.}
+\def \deabstract{Die Generierung realistischer synthetischer Videodaten f\"ur autonomes Fahren ist entscheidend f\"ur das Training und die Validierung von Wahrnehmungssystemen. Traditionelle Simulationsmethoden leiden jedoch unter einer Dom\"anendiskrepanz zu realen Bildern. Diese Arbeit adressiert diese Herausforderung durch die Entwicklung einer semantisch gesteuerten Videogenerierungspipeline basierend auf latenten Diffusionsmodellen. Der Ansatz verwendet semantische Segmentierungskarten als dichte Kontrollsignale und erm\"oglicht eine pr\"azise Spezifikation von Szenen-Layouts einschlie{\ss}lich Stra{\ss}en, Fahrzeugen, Geb\"auden und anderen Elementen. Ein zentraler Beitrag ist ein Semantic-Native Variational Autoencoder, der diskrete semantische Labels effizient in kontinuierliche latente Repr\"asentationen kodiert. Die zweistufige Diffusionspipeline sagt zun\"achst zuk\"unftige semantische Sequenzen vorher und generiert dann fotorealistische RGB-Videos, die auf diesen semantischen Karten basieren. Experimentelle Ergebnisse auf dem KITTI-360-Datensatz zeigen, dass die Methode qualitativ hochwertige Fahrvideos mit vollst\"andiger Szenenkontrolle erzeugt und eine vielversprechende Richtung f\"ur skalierbare synthetische Datengenerierung bietet.}
 
 % *****************************************************************
 %
@@ -208,8 +208,7 @@
     Autor:      & \Large \student \vspace*{2mm}\\
     Ausgabe:    & \startdate \\
     Abgabe:     & \submission \vspace*{3mm}\\
-    Betreuer:   & \tutor \vspace*{2mm}\\
-    Stichworte: & \keywords
+    Betreuer:   & \tutor
   \end{tabular}
   }{
   \begin{tabular}{rp{7cm}}
@@ -217,18 +216,13 @@
     Author:             & \Large \student \vspace*{2mm}\\
     Date of work begin: & \startdate \\
     Date of submission: & \submission \vspace*{3mm}\\
-    Supervisor:         & \tutor \vspace*{2mm}\\
-    Keywords:           & \keywords
+    Supervisor:         & \tutor
   \end{tabular}
   }
   \bugfix
 }
 \date{}
-\publishers{\normalsize
-  \begin{minipage}[t]{.9\textwidth}
-    \abstract
-  \end{minipage}
-}
+\publishers{}
 
 \numberwithin{equation}{chapter} 
 \sloppy 
@@ -269,7 +263,33 @@ Pro-gramm-aus-schnitt Mi-kro-fon-sig-nal}
 \pagenumbering{alph}
 \maketitle
 \cleardoublepage
-\pagenumbering{roman} % roman numbering for table of contents
+
+% *****************************************************************
+% Abstract pages
+% *****************************************************************
+\pagenumbering{roman}
+\setcounter{page}{1}
+
+% English Abstract
+\ifthenelse{\equal{\doclang}{english}}{
+  \chapter*{Abstract}
+  \enabstract
+  \cleardoublepage
+  
+  \chapter*{Kurzfassung}
+  \deabstract
+  \cleardoublepage
+}{
+  % German version - Kurzfassung first
+  \chapter*{Kurzfassung}
+  \deabstract
+  \cleardoublepage
+  
+  \chapter*{Abstract}
+  \enabstract
+  \cleardoublepage
+}
+
 \tableofcontents
 \cleardoublepage
 \setcounter{page}{1}
