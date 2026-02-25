@@ -7,58 +7,218 @@
 This chapter provides the theoretical background and reviews the state of the art in the areas relevant to this thesis: diffusion models, variational autoencoders, video generation, and controllable synthesis.
 
 % -----------------------------------------------------------------
-\section{Diffusion Models}
+\section{Continuous-Time Generative Modeling: From Flows to Diffusion}
 \label{sec:diffusion_models}
+
+Modern generative models such as diffusion models and flow matching methods can be understood from a unified perspective: they construct a generative process by simulating a differential equation that transforms a simple distribution into a complex data distribution. This section presents a continuous-time formulation based on ordinary and stochastic differential equations, providing a principled foundation for both flow models and diffusion models.
+
+\subsection{Generative Modeling as Distribution Transport}
+\label{subsec:distribution_transport}
+
+Let $p_{\text{data}}(\mathbf{x})$ denote the data distribution over $\mathbb{R}^d$, and let $p_0(\mathbf{x})$ denote a simple prior distribution, typically chosen as a standard Gaussian:
+\begin{align}
+    p_0(\mathbf{x}) = \mathcal{N}(\mathbf{0}, \mathbf{I}).
+    \label{eq:prior}
+\end{align}
+The objective of generative modeling is to construct a transformation that maps samples from $p_0$ to samples from $p_{\text{data}}$.
+
+A natural way to formalize this transformation is to define a \emph{probability path}
+\begin{align}
+    \{p_t(\mathbf{x})\}_{t \in [0,1]}
+    \label{eq:prob_path}
+\end{align}
+such that
+\begin{align}
+    p_0(\mathbf{x}) = \mathcal{N}(\mathbf{0}, \mathbf{I}), \qquad p_1(\mathbf{x}) = p_{\text{data}}(\mathbf{x}).
+    \label{eq:path_boundary}
+\end{align}
+If we can construct dynamics that evolve samples according to this path, we obtain a continuous-time generative model. The two main approaches to constructing such dynamics---ordinary differential equations and stochastic differential equations---form the mathematical foundation of modern generative modeling~\cite{song2021scorebased, lipman2023flow, chen2018neural}.
+
+\subsection{Deterministic Flows and Ordinary Differential Equations}
+\label{subsec:ode_flows}
+
+We first consider deterministic dynamics defined by an Ordinary Differential Equation (ODE):
+\begin{align}
+    \frac{d\mathbf{x}_t}{dt} = \mathbf{v}(\mathbf{x}_t, t),
+    \label{eq:flow_ode}
+\end{align}
+where $\mathbf{x}_t \in \mathbb{R}^d$ denotes the state at time $t$, and $\mathbf{v}(\mathbf{x}, t)$ is a time-dependent \emph{vector field} that assigns an instantaneous velocity to every point in space and time. Given an initial sample $\mathbf{x}_0 \sim p_0$, solving the ODE forward in time transports it along a trajectory toward the data distribution.
+
+\paragraph{Evolution of the Probability Density.}
+If samples evolve according to the ODE above, the corresponding probability density $p_t(\mathbf{x})$ satisfies the \emph{continuity equation}:
+\begin{align}
+    \frac{\partial p_t(\mathbf{x})}{\partial t} = -\nabla \cdot \bigl(p_t(\mathbf{x})\,\mathbf{v}(\mathbf{x}, t)\bigr).
+    \label{eq:continuity}
+\end{align}
+This equation expresses conservation of probability mass: the divergence term $\nabla \cdot \mathbf{v}$ controls local expansion or contraction of probability density. Thus, learning a generative model reduces to learning a vector field $\mathbf{v}$ that induces the desired density evolution from $p_0$ to $p_{\text{data}}$.
+
+Neural ODEs~\cite{chen2018neural} parameterize $\mathbf{v}$ with a neural network and solve Equation~\eqref{eq:flow_ode} using numerical ODE solvers, providing a flexible framework for continuous-time generative modeling.
+
+\subsection{Conditional Probability Paths}
+\label{subsec:conditional_paths}
+
+Instead of specifying $\mathbf{v}$ directly, it is often more convenient to first define a \emph{conditional probability path}. The marginal path is obtained by averaging over data samples:
+\begin{align}
+    p_t(\mathbf{x}) = \int p_t(\mathbf{x} \mid \mathbf{x}_1)\, p_{\text{data}}(\mathbf{x}_1)\, d\mathbf{x}_1,
+    \label{eq:marginal_path}
+\end{align}
+where $\mathbf{x}_1 \sim p_{\text{data}}$ is a clean data sample and $p_t(\mathbf{x} \mid \mathbf{x}_1)$ is a designed interpolation between noise and data. A common choice is a \emph{Gaussian conditional path}:
+\begin{align}
+    \mathbf{x}_t = \alpha(t)\,\mathbf{x}_1 + \sigma(t)\,\boldsymbol{\epsilon}, \qquad \boldsymbol{\epsilon} \sim \mathcal{N}(\mathbf{0}, \mathbf{I}),
+    \label{eq:gaussian_interpolant}
+\end{align}
+where $\alpha(t)$ and $\sigma(t)$ are smooth scalar functions satisfying the boundary conditions:
+\begin{align}
+    \alpha(0) = 0,\quad \sigma(0) = 1 \qquad \text{(pure noise at } t=0\text{)}, \notag\\
+    \alpha(1) = 1,\quad \sigma(1) = 0 \qquad \text{(clean data at } t=1\text{)}.
+    \label{eq:path_conditions}
+\end{align}
+This construction explicitly defines how data points are gradually corrupted into noise (or equivalently, how noise is gradually shaped into data). Different choices of $\alpha(t)$ and $\sigma(t)$ recover different generative frameworks, as discussed in Section~\ref{subsec:unified_view}.
+
+\subsection{Conditional and Marginal Vector Fields}
+\label{subsec:vector_fields}
+
+For a fixed data point $\mathbf{x}_1$, the conditional path of Equation~\eqref{eq:gaussian_interpolant} defines a trajectory in expectation. The corresponding \emph{conditional vector field} is obtained by differentiating:
+\begin{align}
+    \mathbf{v}^*(\mathbf{x}_t, t \mid \mathbf{x}_1) = \frac{d}{dt}\,\mathbb{E}[\mathbf{x}_t \mid \mathbf{x}_1] = \dot{\alpha}(t)\,\mathbf{x}_1 + \dot{\sigma}(t)\,\boldsymbol{\epsilon},
+    \label{eq:cond_vector_field}
+\end{align}
+where $\dot{\alpha}$ and $\dot{\sigma}$ denote time derivatives. However, during generation we do not know $\mathbf{x}_1$; we only observe $\mathbf{x}_t$. Therefore, the true vector field governing the marginal distribution is obtained by taking the conditional expectation:
+\begin{align}
+    \mathbf{v}^*(\mathbf{x}_t, t) = \mathbb{E}\!\left[\mathbf{v}^*(\mathbf{x}_t, t \mid \mathbf{x}_1) \;\middle|\; \mathbf{x}_t\right].
+    \label{eq:marginal_vector_field}
+\end{align}
+This \emph{marginal vector field} uniquely determines the ODE that transports the full probability distribution from $p_0$ to $p_{\text{data}}$~\cite{lipman2023flow}.
+
+\subsection{Flow Matching Objective}
+\label{subsec:flow_matching}
+
+Since the true marginal vector field $\mathbf{v}^*(\mathbf{x}, t)$ is intractable in closed form, we approximate it with a neural network $\mathbf{v}_\theta(\mathbf{x}, t)$. Lipman et al.~\cite{lipman2023flow} showed that the \emph{flow matching} objective can be formulated using only the conditional vector field:
+\begin{align}
+    \mathcal{L}_{\text{FM}} = \mathbb{E}_{t,\, \mathbf{x}_1,\, \mathbf{x}_t}\!\left[\left\|\mathbf{v}_\theta(\mathbf{x}_t, t) - \mathbf{v}^*(\mathbf{x}_t, t \mid \mathbf{x}_1)\right\|^2\right],
+    \label{eq:flow_matching}
+\end{align}
+where $t \sim \mathcal{U}(0, 1)$, $\mathbf{x}_1 \sim p_{\text{data}}$, and $\mathbf{x}_t \sim p_t(\mathbf{x} \mid \mathbf{x}_1)$. Crucially, the conditional vector field $\mathbf{v}^*(\mathbf{x}_t, t \mid \mathbf{x}_1)$ is known in closed form (Equation~\ref{eq:cond_vector_field}), making the objective tractable.
+
+Training proceeds by:
+\begin{enumerate}
+    \item Sampling a data point $\mathbf{x}_1 \sim p_{\text{data}}$ and noise $\boldsymbol{\epsilon} \sim \mathcal{N}(\mathbf{0}, \mathbf{I})$,
+    \item Sampling a time step $t \sim \mathcal{U}(0, 1)$,
+    \item Constructing $\mathbf{x}_t = \alpha(t)\,\mathbf{x}_1 + \sigma(t)\,\boldsymbol{\epsilon}$,
+    \item Regressing the neural network output toward the conditional velocity $\mathbf{v}^*(\mathbf{x}_t, t \mid \mathbf{x}_1)$.
+\end{enumerate}
+This reduces generative modeling to \emph{supervised regression on vector fields}. For the special case of \emph{rectified flow}~\cite{liu2023flow}, where $\alpha(t) = t$ and $\sigma(t) = 1 - t$, the conditional vector field simplifies to $\mathbf{v}^* = \mathbf{x}_1 - \boldsymbol{\epsilon}$, yielding straight-line interpolation paths between noise and data.
+
+\subsection{Stochastic Differential Equations}
+\label{subsec:sde}
+
+Diffusion models generalize the deterministic flow framework by introducing stochasticity. Instead of an ODE, the forward process is described by a Stochastic Differential Equation (SDE)~\cite{song2021scorebased}:
+\begin{align}
+    d\mathbf{x} = \mathbf{f}(\mathbf{x}, t)\, dt + g(t)\, d\mathbf{w}_t,
+    \label{eq:forward_sde}
+\end{align}
+where $\mathbf{f}(\mathbf{x}, t)$ is the \emph{drift} coefficient, $g(t)$ is the \emph{diffusion} coefficient controlling the noise magnitude, and $d\mathbf{w}_t$ denotes standard Brownian motion. The drift determines the deterministic trajectory of the process, while the diffusion term injects random perturbations at each infinitesimal time step.
+
+The corresponding evolution of the probability density is governed by the \emph{Fokker--Planck equation}:
+\begin{align}
+    \frac{\partial p_t}{\partial t} = -\nabla \cdot (\mathbf{f}\, p_t) + \frac{1}{2}\,g(t)^2\,\Delta p_t,
+    \label{eq:fokker_planck}
+\end{align}
+where $\Delta = \nabla \cdot \nabla$ is the Laplacian operator. Compared to the continuity equation~\eqref{eq:continuity}, the additional term $\frac{1}{2}g(t)^2 \Delta p_t$ introduces stochastic spreading of probability mass. This diffusion term is what gives diffusion models their name.
+
+\subsection{Reverse-Time SDE and Score Functions}
+\label{subsec:reverse_sde}
+
+A fundamental result by Anderson~\cite{anderson1982reverse} shows that the reverse-time dynamics of the forward SDE~\eqref{eq:forward_sde} is itself an SDE:
+\begin{align}
+    d\mathbf{x} = \left[\mathbf{f}(\mathbf{x}, t) - g(t)^2\,\nabla_{\mathbf{x}} \log p_t(\mathbf{x})\right] dt + g(t)\, d\bar{\mathbf{w}}_t,
+    \label{eq:reverse_sde}
+\end{align}
+where $d\bar{\mathbf{w}}_t$ denotes reverse-time Brownian motion. The critical quantity
+\begin{align}
+    \mathbf{s}(\mathbf{x}, t) \coloneqq \nabla_{\mathbf{x}} \log p_t(\mathbf{x})
+    \label{eq:score_function}
+\end{align}
+is called the \emph{score function}---the gradient of the log-probability density at time $t$. The score points in the direction of increasing probability and its magnitude indicates how steeply the density changes. Intuitively, the reverse SDE follows the drift of the forward process but adds a correction term proportional to the score that ``steers'' samples toward regions of higher data probability.
+
+Diffusion models approximate the score using a neural network $\mathbf{s}_\theta(\mathbf{x}, t) \approx \nabla_{\mathbf{x}} \log p_t(\mathbf{x})$, trained via \emph{denoising score matching}~\cite{song2021scorebased}:
+\begin{align}
+    \mathcal{L}_{\text{SM}} = \mathbb{E}_{t,\, \mathbf{x}_0,\, \mathbf{x}_t}\!\left[\left\|\mathbf{s}_\theta(\mathbf{x}_t, t) - \nabla_{\mathbf{x}_t} \log p_t(\mathbf{x}_t \mid \mathbf{x}_0)\right\|^2\right].
+    \label{eq:score_matching}
+\end{align}
+For Gaussian conditional paths, $\nabla_{\mathbf{x}_t} \log p_t(\mathbf{x}_t \mid \mathbf{x}_0) = -\boldsymbol{\epsilon} / \sigma(t)$, and this objective becomes equivalent to the noise-prediction loss used in DDPMs (see Section~\ref{subsec:ddpm}).
+
+\paragraph{Probability Flow ODE.}
+Song et al.~\cite{song2021scorebased} further showed that any diffusion SDE has a corresponding deterministic ODE---the \emph{probability flow ODE}---that induces the same marginal densities $p_t(\mathbf{x})$:
+\begin{align}
+    \frac{d\mathbf{x}}{dt} = \mathbf{f}(\mathbf{x}, t) - \frac{1}{2}\,g(t)^2\,\nabla_{\mathbf{x}} \log p_t(\mathbf{x}).
+    \label{eq:prob_flow_ode}
+\end{align}
+This ODE enables deterministic sampling with numerical ODE solvers (e.g., Euler, Heun, or adaptive-step methods), offering a trade-off between stochastic diversity and deterministic speed. It also enables exact likelihood computation via the instantaneous change-of-variables formula.
+
+\subsection{Conditional Generation and Guidance}
+\label{subsec:cfg}
+
+In many applications, we wish to condition generation on an external variable $\mathbf{c}$ (e.g., text descriptions, bounding boxes, semantic maps, or trajectories). The conditional score decomposes via Bayes' rule:
+\begin{align}
+    \nabla_{\mathbf{x}} \log p_t(\mathbf{x} \mid \mathbf{c}) = \nabla_{\mathbf{x}} \log p_t(\mathbf{x}) + \nabla_{\mathbf{x}} \log p(\mathbf{c} \mid \mathbf{x}).
+    \label{eq:conditional_score}
+\end{align}
+\emph{Classifier guidance}~\cite{dhariwal2021diffusion} approximates the second term using an auxiliary classifier trained on noisy data. However, this requires training a separate classifier and may introduce artifacts.
+
+\emph{Classifier-free guidance} (CFG)~\cite{ho2022classifierfree} avoids this by jointly training conditional and unconditional score estimates within a single model. During training, the conditioning $\mathbf{c}$ is randomly dropped with some probability, so the model learns both $\mathbf{s}_\theta(\mathbf{x}, t, \mathbf{c})$ and $\mathbf{s}_\theta(\mathbf{x}, t, \varnothing)$. During inference, the two estimates are combined:
+\begin{align}
+    \tilde{\mathbf{s}}_\theta(\mathbf{x}, t, \mathbf{c}) = (1 + w)\,\mathbf{s}_\theta(\mathbf{x}, t, \mathbf{c}) - w\,\mathbf{s}_\theta(\mathbf{x}, t, \varnothing),
+    \label{eq:cfg}
+\end{align}
+where $w > 0$ is the \emph{guidance scale}. Higher values of $w$ increase adherence to the condition at the expense of sample diversity. CFG is widely used in modern diffusion models including Stable Diffusion and Stable Video Diffusion, and is employed in both stages of the pipeline presented in this thesis.
+
+\subsection{Unified View}
+\label{subsec:unified_view}
+
+Both flow matching and diffusion models can be understood within a unified differential equation framework~\cite{lipman2023flow, song2021scorebased, albergo2023stochastic}:
+
+\begin{itemize}
+    \item \textbf{Flow models} learn deterministic vector fields $\mathbf{v}_\theta$ and generate samples by solving ODEs (Equation~\ref{eq:flow_ode}).
+    \item \textbf{Diffusion models} learn score functions $\mathbf{s}_\theta$ governing reverse-time SDEs (Equation~\ref{eq:reverse_sde}) or their equivalent probability flow ODEs (Equation~\ref{eq:prob_flow_ode}).
+    \item \textbf{Discrete diffusion models} (e.g., DDPM~\cite{ho2020denoising}) arise from time-discretization of continuous SDEs with specific choices of $\mathbf{f}$ and $g$.
+\end{itemize}
+
+The connection between flow matching and diffusion is made precise by noting that the score function and the marginal vector field are related via:
+\begin{align}
+    \mathbf{v}^*(\mathbf{x}_t, t) = \mathbf{f}(\mathbf{x}_t, t) - \frac{1}{2}\,g(t)^2\,\nabla_{\mathbf{x}} \log p_t(\mathbf{x}_t),
+    \label{eq:flow_score_relation}
+\end{align}
+which is exactly the probability flow ODE~\eqref{eq:prob_flow_ode}. This perspective provides a coherent mathematical foundation for modern generative modeling and naturally extends to conditional and controllable generation settings, as exploited throughout this thesis.
 
 \subsection{Denoising Diffusion Probabilistic Models}
 \label{subsec:ddpm}
 
-Diffusion models are a class of generative models that learn to reverse a gradual noising process. The foundational framework was introduced by Sohl-Dickstein et al.~\cite{sohldickstein2015deep} and significantly advanced by Ho et al.~\cite{ho2020denoising} with Denoising Diffusion Probabilistic Models (DDPMs).
-
-\paragraph{Forward Process.}
-The forward (diffusion) process gradually adds Gaussian noise to a data sample $\mathbf{x}_0 \sim q(\mathbf{x}_0)$ over $T$ steps according to a variance schedule $\{\beta_t\}_{t=1}^T$:
+Denoising Diffusion Probabilistic Models (DDPMs)~\cite{ho2020denoising, sohldickstein2015deep} provide a concrete, discrete-time instantiation of the continuous framework presented above. The forward process is defined by a Markov chain with Gaussian transitions:
 \begin{align}
-    q(\mathbf{x}_t | \mathbf{x}_{t-1}) &= \mathcal{N}\!\left(\mathbf{x}_t;\, \sqrt{1-\beta_t}\,\mathbf{x}_{t-1},\, \beta_t \mathbf{I}\right).
+    q(\mathbf{x}_t \mid \mathbf{x}_{t-1}) = \mathcal{N}\!\left(\mathbf{x}_t;\, \sqrt{1 - \beta_t}\,\mathbf{x}_{t-1},\, \beta_t\,\mathbf{I}\right),
     \label{eq:forward_step}
 \end{align}
-Defining $\alpha_t = 1 - \beta_t$ and $\bar{\alpha}_t = \prod_{s=1}^{t} \alpha_s$, the noisy sample at any time step $t$ can be expressed in closed form:
+where $\{\beta_t\}_{t=1}^T$ is a variance schedule. Defining $\alpha_t = 1 - \beta_t$ and $\bar{\alpha}_t = \prod_{s=1}^t \alpha_s$, the noisy sample at any step $t$ admits a closed-form expression:
 \begin{align}
-    q(\mathbf{x}_t | \mathbf{x}_0) &= \mathcal{N}\!\left(\mathbf{x}_t;\, \sqrt{\bar{\alpha}_t}\,\mathbf{x}_0,\, (1-\bar{\alpha}_t)\,\mathbf{I}\right),
+    q(\mathbf{x}_t \mid \mathbf{x}_0) = \mathcal{N}\!\left(\mathbf{x}_t;\, \sqrt{\bar{\alpha}_t}\,\mathbf{x}_0,\, (1 - \bar{\alpha}_t)\,\mathbf{I}\right),
     \label{eq:forward_closed}
 \end{align}
-which allows direct sampling: $\mathbf{x}_t = \sqrt{\bar{\alpha}_t}\,\mathbf{x}_0 + \sqrt{1-\bar{\alpha}_t}\,\boldsymbol{\epsilon}$ where $\boldsymbol{\epsilon} \sim \mathcal{N}(\mathbf{0}, \mathbf{I})$.
+which corresponds to the continuous Gaussian path~\eqref{eq:gaussian_interpolant} with $\alpha(t) = \sqrt{\bar{\alpha}_t}$ and $\sigma(t) = \sqrt{1 - \bar{\alpha}_t}$.
 
-\paragraph{Reverse Process.}
-The generative (reverse) process learns to denoise, starting from $\mathbf{x}_T \sim \mathcal{N}(\mathbf{0}, \mathbf{I})$:
+The reverse process is parameterized as:
 \begin{align}
-    p_\theta(\mathbf{x}_{t-1} | \mathbf{x}_t) &= \mathcal{N}\!\left(\mathbf{x}_{t-1};\, \boldsymbol{\mu}_\theta(\mathbf{x}_t, t),\, \sigma_t^2 \mathbf{I}\right).
+    p_\theta(\mathbf{x}_{t-1} \mid \mathbf{x}_t) = \mathcal{N}\!\left(\mathbf{x}_{t-1};\, \boldsymbol{\mu}_\theta(\mathbf{x}_t, t),\, \sigma_t^2\,\mathbf{I}\right).
     \label{eq:reverse}
 \end{align}
 Ho et al.~\cite{ho2020denoising} showed that parameterizing the model to predict the noise $\boldsymbol{\epsilon}_\theta(\mathbf{x}_t, t)$ rather than the mean directly leads to a simplified training objective:
 \begin{align}
-    \mathcal{L}_{\text{simple}} &= \mathbb{E}_{t, \mathbf{x}_0, \boldsymbol{\epsilon}}\!\left[\left\|\boldsymbol{\epsilon} - \boldsymbol{\epsilon}_\theta(\mathbf{x}_t, t)\right\|^2\right].
+    \mathcal{L}_{\text{simple}} = \mathbb{E}_{t,\, \mathbf{x}_0,\, \boldsymbol{\epsilon}}\!\left[\left\|\boldsymbol{\epsilon} - \boldsymbol{\epsilon}_\theta(\mathbf{x}_t, t)\right\|^2\right],
     \label{eq:ddpm_loss}
 \end{align}
+which is equivalent to the score matching objective~\eqref{eq:score_matching} up to a time-dependent weighting factor, since $\boldsymbol{\epsilon} = -\sigma(t)\,\nabla_{\mathbf{x}_t} \log p_t(\mathbf{x}_t \mid \mathbf{x}_0)$. This connection confirms that DDPM training is a discretized form of score function learning.
 
-\paragraph{Score-Based Interpretation.}
-Song et al.~\cite{song2021scorebased} unified DDPMs with score matching by viewing the forward process as a continuous-time stochastic differential equation (SDE). The reverse-time SDE is:
-\begin{align}
-    d\mathbf{x} = \left[\mathbf{f}(\mathbf{x},t) - g(t)^2 \nabla_{\mathbf{x}} \log p_t(\mathbf{x})\right] dt + g(t)\, d\bar{\mathbf{w}},
-    \label{eq:reverse_sde}
-\end{align}
-where $\nabla_{\mathbf{x}} \log p_t(\mathbf{x})$ is the \emph{score function}, approximated by the neural network. This formulation enables flexible sampling strategies, including deterministic ODE solvers.
-
-Subsequent improvements by Nichol and Dhariwal~\cite{nichol2021improved} introduced learned variance schedules and importance-weighted training, while Dhariwal and Nichol~\cite{dhariwal2021diffusion} demonstrated that diffusion models can surpass GANs~\cite{goodfellow2014generative} in image generation quality when combined with classifier guidance.
-
-\subsection{Classifier-Free Guidance}
-\label{subsec:cfg}
-
-Ho and Salimans~\cite{ho2022classifierfree} proposed \emph{classifier-free guidance} (CFG), which avoids the need for a separate classifier by jointly training conditional and unconditional models. During inference, the predicted noise is interpolated:
-\begin{align}
-    \tilde{\boldsymbol{\epsilon}}_\theta(\mathbf{x}_t, t, \mathbf{c}) = (1 + w)\,\boldsymbol{\epsilon}_\theta(\mathbf{x}_t, t, \mathbf{c}) - w\,\boldsymbol{\epsilon}_\theta(\mathbf{x}_t, t, \varnothing),
-    \label{eq:cfg}
-\end{align}
-where $w > 0$ is the guidance scale and $\varnothing$ denotes the null condition (obtained by randomly dropping the conditioning during training). Higher values of $w$ increase adherence to the condition at the expense of sample diversity. CFG is widely used in modern diffusion models including Stable Diffusion and Stable Video Diffusion.
+Subsequent improvements by Nichol and Dhariwal~\cite{nichol2021improved} introduced learned variance schedules and importance-weighted training, while Dhariwal and Nichol~\cite{dhariwal2021diffusion} demonstrated that diffusion models surpass GANs~\cite{goodfellow2014generative} in image generation quality when combined with classifier guidance.
 
 % -----------------------------------------------------------------
 \section{Latent Diffusion Models}
