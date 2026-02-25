@@ -227,36 +227,107 @@ Subsequent improvements by Nichol and Dhariwal~\cite{nichol2021improved} introdu
 \subsection{Motivation and Architecture}
 \label{subsec:ldm_motivation}
 
-Running the diffusion process directly in pixel space is computationally prohibitive for high-resolution images and videos. Rombach et al.~\cite{rombach2022highresolution} addressed this by introducing \emph{Latent Diffusion Models} (LDMs), which operate in a compressed latent space learned by a VAE.
+Applying diffusion directly in pixel space is computationally expensive, particularly for high-resolution images and video sequences. The cost scales with spatial resolution, as the denoising network must operate on full-resolution tensors at every diffusion step.
 
-The LDM framework consists of two stages:
+Rombach et al.~\cite{rombach2022highresolution} introduced \emph{Latent Diffusion Models} (LDMs), which perform diffusion in a learned latent space rather than in pixel space. The key idea is to separate:
+\begin{itemize}
+    \item Perceptual compression, and
+    \item Generative modeling.
+\end{itemize}
+
+\paragraph{Perceptual Compression via VAE.}
+A variational autoencoder (VAE) is first trained to encode images into a lower-dimensional latent representation. Let $\mathbf{x} \in \mathbb{R}^{H \times W \times 3}$ denote an image. The encoder $\mathcal{E}$ maps it to a latent tensor:
+\begin{align}
+    \mathbf{z} = \mathcal{E}(\mathbf{x}) \in \mathbb{R}^{h \times w \times c},
+    \label{eq:vae_encode}
+\end{align}
+where $h = H/f$, $w = W/f$, and $f$ is a spatial downsampling factor (typically $f=8$). The decoder $\mathcal{D}$ reconstructs the image:
+\begin{align}
+    \hat{\mathbf{x}} = \mathcal{D}(\mathbf{z}),
+    \label{eq:vae_decode}
+\end{align}
+such that $\mathcal{D}(\mathcal{E}(\mathbf{x})) \approx \mathbf{x}$. The VAE is trained with a combination of reconstruction and perceptual losses to ensure that the latent representation preserves semantically relevant structure.
+
+By operating in latent space, the dimensionality is reduced by a factor of $f^2$, significantly lowering computational cost.
+
+\paragraph{Diffusion in Latent Space.}
+After training the VAE, diffusion is performed on latent variables:
+\begin{align}
+    \mathbf{z}_0 = \mathcal{E}(\mathbf{x}).
+    \label{eq:latent_init}
+\end{align}
+The forward and reverse diffusion processes are then applied to $\mathbf{z}$ rather than $\mathbf{x}$:
+\begin{align}
+    q(\mathbf{z}_t \mid \mathbf{z}_0), \quad p_\theta(\mathbf{z}_{t-1} \mid \mathbf{z}_t).
+    \label{eq:latent_diffusion}
+\end{align}
+The training objective remains identical to pixel-space diffusion (e.g., noise prediction or score matching as in Equations~\eqref{eq:ddpm_loss} and~\eqref{eq:score_matching}), but the model now learns to denoise latent representations instead of raw pixels.
+
+At inference time:
 \begin{enumerate}
-    \item \textbf{Perceptual Compression:} A VAE with encoder $\mathcal{E}$ and decoder $\mathcal{D}$ is trained to map images $\mathbf{x} \in \mathbb{R}^{H \times W \times 3}$ to latents $\mathbf{z} = \mathcal{E}(\mathbf{x}) \in \mathbb{R}^{h \times w \times c}$ such that $\mathcal{D}(\mathcal{E}(\mathbf{x})) \approx \mathbf{x}$, with a spatial downsampling factor $f = H/h$ (typically $f=8$).
-    
-    \item \textbf{Latent Diffusion:} The forward and reverse diffusion processes of Equations~\eqref{eq:forward_step}--\eqref{eq:ddpm_loss} are applied in the latent space $\mathbf{z}$ rather than the pixel space $\mathbf{x}$.
+    \item Sample $\mathbf{z}_T \sim \mathcal{N}(\mathbf{0}, \mathbf{I})$,
+    \item Iteratively denoise to obtain $\mathbf{z}_0$,
+    \item Decode using $\mathcal{D}$ to produce the final image.
 \end{enumerate}
 
-The denoising network is a UNet~\cite{ronneberger2015unet} with cross-attention layers~\cite{vaswani2017attention} that can incorporate conditioning information (text embeddings, class labels, spatial maps) via:
+\paragraph{Conditioning via Cross-Attention.}
+The denoising network in LDMs is typically a UNet~\cite{ronneberger2015unet} augmented with cross-attention layers~\cite{vaswani2017attention} to incorporate conditioning signals such as text embeddings, class labels, or spatial maps. Given intermediate UNet features projected to queries $\mathbf{Q}$, and conditioning embeddings projected to keys $\mathbf{K}$ and values $\mathbf{V}$, cross-attention is computed as:
 \begin{align}
     \text{Attention}(\mathbf{Q}, \mathbf{K}, \mathbf{V}) = \text{softmax}\!\left(\frac{\mathbf{Q}\mathbf{K}^\top}{\sqrt{d}}\right)\mathbf{V},
     \label{eq:cross_attention}
 \end{align}
-where $\mathbf{Q}$ is projected from the intermediate UNet features and $\mathbf{K}, \mathbf{V}$ from the conditioning signal. This architecture forms the backbone of Stable Diffusion~\cite{rombach2022highresolution} and its video extensions.
+where $d$ is the dimensionality of the attention head. This mechanism allows the generative process to be guided by external information while maintaining spatial consistency in the latent representation.
+
+\paragraph{Relevance to Video Diffusion.}
+Latent diffusion significantly reduces computational cost and memory usage, enabling extension to high-resolution images and spatio-temporal video models. Stable Diffusion~\cite{rombach2022highresolution} and its video extensions build upon this architecture, and the Ctrl-V framework adopts the same latent-space diffusion backbone. Operating in latent space is therefore essential for scalable controllable video generation.
 
 \subsection{EDM Noise Scheduling}
 \label{subsec:edm}
 
-Karras et al.~\cite{karras2022elucidating} proposed the EDM (Elucidating the Design space of Diffusion Models) framework, which reparameterizes the noise schedule using a continuous noise level $\sigma$. The noisy sample is expressed as:
+In the continuous-time formulation presented above, diffusion models are defined through a stochastic differential equation (SDE) that gradually perturbs data toward Gaussian noise. In practice, early diffusion models such as DDPM discretized this process using a predefined variance schedule $\{\beta_t\}$ indexed by time $t$.
+
+While effective, this time-based parameterization introduces several limitations:
+\begin{itemize}
+    \item The noise level is indirectly controlled by discrete time indices,
+    \item The dynamic range of signal-to-noise ratios varies significantly across timesteps,
+    \item Training stability depends heavily on the choice of variance schedule,
+    \item Sampling procedures are tightly coupled to the discretization design.
+\end{itemize}
+
+To address these issues, Karras et al.~\cite{karras2022elucidating} proposed the EDM (Elucidating the Design Space of Diffusion Models) framework, which reformulates diffusion directly in terms of a continuous noise scale $\sigma$.
+
+\paragraph{Continuous Noise Parameterization.}
+Instead of indexing the forward process by time $t$, EDM defines corruption using an explicit noise magnitude:
 \begin{align}
-    \mathbf{x}_\sigma = \mathbf{x}_0 + \sigma\,\boldsymbol{\epsilon}, \quad \boldsymbol{\epsilon} \sim \mathcal{N}(\mathbf{0}, \mathbf{I}).
+    \mathbf{x}_\sigma = \mathbf{x}_0 + \sigma\,\boldsymbol{\epsilon}, \quad \boldsymbol{\epsilon} \sim \mathcal{N}(\mathbf{0}, \mathbf{I}),
     \label{eq:edm_noise}
 \end{align}
-The denoiser is parameterized to predict a combination of the input and estimated clean signal via preconditioning functions $c_{\text{skip}}(\sigma)$, $c_{\text{out}}(\sigma)$, $c_{\text{in}}(\sigma)$, and $c_{\text{noise}}(\sigma)$:
+where $\mathbf{x}_0$ is a clean sample and $\sigma > 0$ directly controls the signal-to-noise ratio. This formulation can be interpreted as a variance-exploding SDE discretized by noise scale rather than time. Small $\sigma$ corresponds to near-clean samples, while large $\sigma$ approximates pure noise.
+
+By using $\sigma$ as the primary parameter, the diffusion process becomes independent of a specific time discretization. This provides greater flexibility in both training and sampling.
+
+\paragraph{Preconditioned Denoiser.}
+Another key insight of EDM is that a single neural network must operate across a wide range of noise levels. Without appropriate scaling, the network faces unstable gradients and poorly conditioned inputs. EDM therefore introduces a preconditioned denoiser:
 \begin{align}
     D_\theta(\mathbf{x}_\sigma; \sigma) = c_{\text{skip}}(\sigma)\,\mathbf{x}_\sigma + c_{\text{out}}(\sigma)\,F_\theta\!\left(c_{\text{in}}(\sigma)\,\mathbf{x}_\sigma;\, c_{\text{noise}}(\sigma)\right),
     \label{eq:edm_denoiser}
 \end{align}
-where $F_\theta$ is the neural network. This formulation is adopted by Stable Video Diffusion~\cite{blattmann2023stable} and consequently by the Ctrl-V framework~\cite{luo2025ctrlv} used in this work.
+where the scaling functions normalize the input and output across different noise magnitudes. This design ensures:
+\begin{itemize}
+    \item Stable gradients across noise scales,
+    \item Improved numerical conditioning,
+    \item Decoupling between noise scheduling and network architecture.
+\end{itemize}
+
+\paragraph{Relation to the Continuous Diffusion Framework.}
+From the perspective of Section~\ref{sec:diffusion_models}, EDM can be viewed as:
+\begin{itemize}
+    \item Choosing a specific probability path $p_\sigma(\mathbf{x})$,
+    \item Learning the reverse-time dynamics using a preconditioned score or denoiser,
+    \item Parameterizing the process in terms of noise level instead of abstract time.
+\end{itemize}
+
+Modern large-scale diffusion systems, including Stable Diffusion and Stable Video Diffusion~\cite{blattmann2023stable}, adopt this formulation. The Ctrl-V framework~\cite{luo2025ctrlv} used in this work inherits the EDM noise parameterization, making it directly compatible with continuous-time diffusion theory.
 
 % -----------------------------------------------------------------
 \section{Variational Autoencoders}
