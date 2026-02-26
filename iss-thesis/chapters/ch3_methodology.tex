@@ -139,54 +139,126 @@ The proposed pipeline, illustrated in Figure~\ref{fig:pipeline_overview}, consis
 \subsection{Semantic-Native VAE}
 \label{subsec:semantic_native_vae}
 
-The Semantic-Native VAE is designed to encode discrete semantic label maps into the same latent space as the pretrained SVD VAE, without the information loss caused by mapping through 3-channel RGB. The architecture is shown in Figure~\ref{fig:semantic_vae_arch}.
+The pretrained Stable Video Diffusion (SVD) VAE was trained on natural RGB images and therefore assumes an input tensor $\mathbf{x}_{\text{rgb}} \in \mathbb{R}^{B \times T \times 3 \times H \times W}$. Internally, the VAE begins with a learned projection that converts 3 RGB channels into the feature width expected by the encoder backbone (128 channels), and ends with a symmetric projection from 128-channel decoder features back to 3 RGB channels. However, semantic label maps are \emph{discrete} variables
+\begin{align}
+    \mathbf{y} \in \{0, \ldots, C-1\}^{B \times T \times H \times W}, \quad C = 19,
+    \label{eq:semantic_input}
+\end{align}
+and do not admit a meaningful representation in 3 channels without information loss. To bridge this mismatch, we introduce a \emph{Semantic-Native VAE} that replaces only the RGB-specific input and output projections while keeping the high-capacity pretrained VAE core frozen. The architecture is illustrated in Figure~\ref{fig:semantic_vae_arch}.
 
 \begin{figure}[t]
     \centering
-    % TODO: Replace with actual architecture diagram
-    \fbox{\parbox{0.9\textwidth}{\centering\vspace{3cm}\textbf{[Semantic-Native VAE Architecture Diagram]}\\\textit{Semantic IDs $\rightarrow$ One-hot $\rightarrow$ Stem (19$\rightarrow$128) $\rightarrow$ Frozen VAE Core $\rightarrow$ Head (128$\rightarrow$19)}\vspace{3cm}}}
-    \caption{Architecture of the Semantic-Native VAE. The trainable Semantic Stem and Head (shown in blue) interface with the frozen VAE encoder and decoder cores (shown in gray), bypassing the original RGB input/output convolutions.}
+    \includegraphics[width=0.9\textwidth]{images/semantic_vae_architecture.png}
+    \caption{Architecture of the Semantic-Native VAE. The trainable Semantic Stem and Head (shown in blue) replace the original RGB input/output convolutions and interface directly with the frozen VAE encoder and decoder cores (shown in gray), bypassing the RGB bottleneck.}
     \label{fig:semantic_vae_arch}
 \end{figure}
 
+\paragraph{Why the Semantic Jump Is Needed: Removing the RGB Bottleneck.}
+A naive approach to reuse the RGB VAE for semantic data is to map semantic IDs to a 3-channel color image and feed it into the pretrained encoder. This is problematic for two fundamental reasons:
+
+\begin{enumerate}
+    \item \textbf{Information bottleneck ($C \rightarrow 3$):} A one-hot semantic representation contains $C = 19$ mutually exclusive class channels. Mapping this to 3 channels necessarily collapses class separability: different classes may map to similar colors, RGB differences encode appearance rather than class identity, and the mapping is not invertible (many-to-one).
+
+    \item \textbf{Domain mismatch of the learned RGB projection:} The first convolution of the pretrained VAE is trained to extract edges, textures, and colors from natural images. Semantic maps contain piecewise-constant regions and sharp class boundaries with fundamentally different statistics. Feeding such data through an RGB-trained input stem introduces a distribution shift at the earliest layer, which propagates through the entire encoder.
+\end{enumerate}
+
+For these reasons, we remove the RGB-specific $3 \rightarrow 128$ projection and replace it with a semantic-specific adapter. This replacement is what we refer to as the \emph{semantic jump}: it directly maps from the semantic domain into the internal feature space of the pretrained VAE core, bypassing the RGB bottleneck entirely. Concretely, the data path changes from:
+\begin{align}
+    \text{Original:} \quad &\mathbf{x}_{\text{rgb}} \xrightarrow{\text{Conv}^{3 \rightarrow 128}} \text{EncCore} \xrightarrow{} \mathbf{z} \xrightarrow{} \text{DecCore} \xrightarrow{\text{Conv}^{128 \rightarrow 3}} \hat{\mathbf{x}}_{\text{rgb}}, \nonumber \\
+    \text{Semantic:} \quad &\mathbf{x}_{\text{oh}} \xrightarrow{\text{Stem}^{C \rightarrow 128}} \text{EncCore} \xrightarrow{} \mathbf{z} \xrightarrow{} \text{DecCore} \xrightarrow{\text{Head}^{128 \rightarrow C}} \hat{\mathbf{s}}.
+    \label{eq:path_comparison}
+\end{align}
+
 \paragraph{Input Encoding.}
-Given semantic label maps $\mathbf{y} \in \{0, \ldots, C-1\}^{B \times T \times H \times W}$ with $C = 19$ classes, the input is first one-hot encoded:
+We first convert discrete semantic IDs into a one-hot tensor:
 \begin{align}
     \mathbf{x}_{\text{oh}} = \text{OneHot}(\mathbf{y}) \in \{0, 1\}^{BT \times C \times H \times W}.
     \label{eq:onehot}
 \end{align}
-Pixels with the ignore index (255, used for unlabeled regions) are clamped to class 0 during encoding and masked in the loss computation.
+Pixels with the ignore index (255, used for unlabeled regions) are clamped to class 0 during encoding and excluded from the loss via a binary mask. This representation preserves semantic identity explicitly: each channel corresponds to exactly one class, and no information is lost through color encoding.
 
-\paragraph{Semantic Stem.}
-The stem converts the one-hot encoding to the 128-channel feature space that the VAE encoder core expects:
+\paragraph{Semantic Input Adapter (Replacing the RGB Input Stem).}
+In the original RGB VAE, the input projection performs:
+$\mathbb{R}^{3 \times H \times W} \rightarrow \mathbb{R}^{128 \times H \times W}.$
+We replace this with a trainable two-layer convolutional stem:
 \begin{align}
-    \text{Stem}(\mathbf{x}_{\text{oh}}) &= \text{Conv}_{3 \times 3}^{64 \rightarrow 128}\!\left(\text{SiLU}\!\left(\text{GN}_8\!\left(\text{Conv}_{3 \times 3}^{19 \rightarrow 64}(\mathbf{x}_{\text{oh}})\right)\right)\right),
+    \text{Stem}(\mathbf{x}_{\text{oh}}) = \text{Conv}_{3 \times 3}^{64 \rightarrow 128}\!\left(\text{SiLU}\!\left(\text{GN}_8\!\left(\text{Conv}_{3 \times 3}^{C \rightarrow 64}(\mathbf{x}_{\text{oh}})\right)\right)\right),
     \label{eq:stem}
 \end{align}
-where $\text{GN}_8$ denotes Group Normalization~\cite{wu2018group} with 8 groups and $\text{SiLU}(x) = x \cdot \sigma(x)$ is the Sigmoid Linear Unit activation. Both convolutions use $3 \times 3$ kernels with padding 1. Weights are initialized with Kaiming normal initialization.
+where $\text{GN}_8$ denotes Group Normalization~\cite{wu2018group} with 8 groups and $\text{SiLU}(x) = x \cdot \sigma(x)$ is the Sigmoid Linear Unit activation. Both convolutions use $3 \times 3$ kernels with padding~1 and are initialized with Kaiming normal initialization. This adapter serves two purposes: (i)~it removes the semantic compression bottleneck ($C \rightarrow 3$) by never projecting semantics into RGB, and (ii)~it matches the 128-channel interface expected by the pretrained encoder core.
 
-\paragraph{VAE Encoder Core (Frozen).}
-The frozen encoder core processes the 128-channel stem output through:
-\begin{itemize}
-    \item Four downsampling blocks with residual connections and self-attention,
-    \item A mid-block with self-attention,
-    \item Group normalization, SiLU activation, and a final convolution to produce 8-channel output (4 channels for mean $\boldsymbol{\mu}$ and 4 for log-variance $\log \boldsymbol{\sigma}^2$).
-\end{itemize}
-The latent code $\mathbf{z} = \boldsymbol{\mu}$ (mode) is used for deterministic encoding, producing $\mathbf{z} \in \mathbb{R}^{4 \times H/8 \times W/8}$.
-
-\paragraph{VAE Decoder Core (Frozen).}
-The frozen decoder core maps latent codes back to 128-channel features through upsampling blocks with temporal (3D) convolutions and self-attention. Each frame is decoded independently with $T_{\text{dec}}=1$ to produce features $\mathbf{h}_{\text{dec}} \in \mathbb{R}^{128 \times H \times W}$. Features are captured before the original RGB output convolution using forward hooks, which allows gradient flow through the frozen decoder back to the trainable stem.
-
-\paragraph{Semantic Head.}
-The head converts 128-channel decoder features to semantic logits using 3D convolutions for temporal consistency:
+\paragraph{Frozen VAE Encoder Core.}
+The output of the semantic stem is fed into the \emph{frozen} pretrained VAE encoder core:
 \begin{align}
-    \text{Head}(\mathbf{h}_{\text{dec}}) &= \text{Conv}_{1 \times 1 \times 1}^{64 \rightarrow 19}\!\left(\text{SiLU}\!\left(\text{GN}_8\!\left(\text{Conv}_{3 \times 3 \times 3}^{128 \rightarrow 64}(\mathbf{h}_{\text{dec}})\right)\right)\right).
+    \mathbf{h}_{\text{enc}} = \text{EncCore}\!\left(\text{Stem}(\mathbf{x}_{\text{oh}})\right).
+    \label{eq:enc_core}
+\end{align}
+The encoder core processes the 128-channel input through four downsampling blocks with residual connections and self-attention, a mid-block with self-attention, and a final convolution that produces Gaussian posterior parameters $(\boldsymbol{\mu},\, \log \boldsymbol{\sigma}^2) \in \mathbb{R}^{BT \times 8 \times H/8 \times W/8}$. We use \emph{deterministic encoding} for compatibility with the diffusion backbone:
+\begin{align}
+    \mathbf{z} = \boldsymbol{\mu} \in \mathbb{R}^{BT \times 4 \times H/8 \times W/8}.
+    \label{eq:deterministic_latent}
+\end{align}
+Freezing the encoder core ensures that the resulting latent space remains aligned with the SVD latent geometry used in Stages~1 and~2.
+
+\paragraph{Frozen VAE Decoder Core.}
+The frozen decoder core maps latent codes back to 128-channel features through upsampling blocks with temporal (3D) convolutions and self-attention. Each frame is decoded independently with $T_{\text{dec}} = 1$ to produce features:
+\begin{align}
+    \mathbf{h}_{\text{dec}} = \text{DecCore}(\mathbf{z}) \in \mathbb{R}^{BT \times 128 \times H \times W}.
+    \label{eq:dec_features}
+\end{align}
+Features are captured \emph{before} the original RGB output convolution using forward hooks. This is critical: it allows gradient flow through the frozen decoder back to the trainable stem during backpropagation, while completely bypassing the RGB output layer.
+
+\paragraph{Semantic Output Adapter (Replacing the RGB Output Head).}
+The pretrained decoder ends with a projection $\mathbb{R}^{128 \times H \times W} \rightarrow \mathbb{R}^{3 \times H \times W}$ that produces RGB pixel values. This is unsuitable for semantic reconstruction because semantics are \emph{categorical}, not continuous. We replace this with a trainable semantic classifier head:
+\begin{align}
+    \text{Head}(\mathbf{h}_{\text{dec}}) = \text{Conv}_{1 \times 1 \times 1}^{64 \rightarrow C}\!\left(\text{SiLU}\!\left(\text{GN}_8\!\left(\text{Conv}_{3 \times 3 \times 3}^{128 \rightarrow 64}(\mathbf{h}_{\text{dec}})\right)\right)\right),
     \label{eq:head}
 \end{align}
-The use of 3D convolutions (with $3 \times 3 \times 3$ kernels in the first layer) allows the head to leverage temporal context for smoother predictions across frames. The final $1 \times 1 \times 1$ convolution produces per-class logits.
+producing per-pixel class logits $\hat{\mathbf{s}} \in \mathbb{R}^{B \times T \times C \times H \times W}$. The use of 3D convolutions ($3 \times 3 \times 3$ kernels in the first layer) allows the head to leverage temporal context for smoother predictions across frames, while the final $1 \times 1 \times 1$ convolution produces class-specific outputs.
 
-\paragraph{Parameter Efficiency.}
-The Semantic Stem contains approximately 10,000 parameters and the Semantic Head approximately 190,000 parameters, for a total of $\sim$200,000 trainable parameters. The frozen VAE core contains $\sim$84 million parameters. This parameter-efficient design enables fast convergence with limited training data.
+\paragraph{Training Strategy: Freeze Core, Train Only Semantic Adapters.}
+During training, all pretrained VAE core parameters are frozen:
+\begin{align}
+    \Theta_{\text{core}} = \{\Theta_{\text{EncCore}},\, \Theta_{\text{DecCore}}\} \quad \text{(frozen)},
+    \label{eq:frozen_params}
+\end{align}
+and only the semantic adapters are optimized:
+\begin{align}
+    \Theta_{\text{sem}} = \{\Theta_{\text{Stem}},\, \Theta_{\text{Head}}\} \quad \text{(trainable)}.
+    \label{eq:trainable_params}
+\end{align}
+This strategy provides two key benefits:
+\begin{enumerate}
+    \item \textbf{Latent space preservation:} The pretrained latent geometry used by SVD remains unchanged, ensuring compatibility with the diffusion models in Stages~1 and~2.
+    \item \textbf{Parameter efficiency:} By training only $\sim$200K parameters (versus $\sim$84M frozen core parameters), the model avoids overfitting on limited semantic data and converges rapidly.
+\end{enumerate}
+Although the core is frozen, gradients flow \emph{through} it during backpropagation (it acts as a fixed differentiable mapping), but only $\Theta_{\text{sem}}$ receives parameter updates.
+
+\paragraph{Training Objective: Cross-Entropy Loss.}
+The task of the Semantic-Native VAE is to reconstruct a categorical semantic map. Each pixel corresponds to a discrete class index; therefore, this is a \emph{per-pixel classification} problem. The correct likelihood model is categorical:
+\begin{align}
+    p(y_{i,j} \mid \hat{\mathbf{s}}_{i,j}) = \text{Categorical}\!\left(\text{softmax}(\hat{\mathbf{s}}_{i,j})\right).
+    \label{eq:categorical_likelihood}
+\end{align}
+Maximizing this likelihood leads directly to cross-entropy minimization:
+\begin{align}
+    \mathcal{L}_{\text{CE}} = -\sum_{b,t,i,j} m_{b,t,i,j} \cdot \log\!\left(\text{softmax}(\hat{\mathbf{s}}_{b,t,:,i,j})\right)_{y_{b,t,i,j}},
+    \label{eq:ce_loss}
+\end{align}
+where $m$ is the ignore mask ($m = 0$ for pixels with ignore index, $m = 1$ otherwise).
+
+Two design choices regarding the loss function merit explicit justification:
+
+\begin{itemize}
+    \item \textbf{Why not MSE or regression losses?} Using an $L_2$ loss on class indices would impose an artificial ordering (e.g., ``road = 0'' being numerically closer to ``sidewalk = 1'' than to ``car = 13''), which is semantically meaningless. Cross-entropy is invariant to label index permutations and correctly models discrete, unordered categories.
+
+    \item \textbf{Why no KL regularization term?} A standard VAE objective includes a KL divergence term $\mathcal{L}_{\text{VAE}} = \mathcal{L}_{\text{recon}} + \beta\, D_{\text{KL}}(q(\mathbf{z} \mid \mathbf{x}) \| p(\mathbf{z}))$ to enforce a latent prior. In our case, the encoder core is \emph{frozen} and already trained to produce latents compatible with the diffusion prior. Introducing an additional KL term would either be ineffective (since the core parameters cannot be updated) or would distort the learned semantic adapters away from the pretrained latent geometry. Therefore, we use deterministic latents $\mathbf{z} = \boldsymbol{\mu}$ and optimize only reconstruction via cross-entropy.
+\end{itemize}
+
+This design makes the Semantic-Native VAE behave as a \emph{semantic interface to a fixed latent manifold}, rather than a fully retrained generative autoencoder.
+
+\paragraph{Parameter Count.}
+The Semantic Stem contains approximately 10,000 parameters and the Semantic Head approximately 190,000 parameters, for a total of $\sim$200,000 trainable parameters. The frozen VAE core contains $\sim$84 million parameters. This parameter-efficient design enables fast convergence with limited training data and minimal risk of overfitting.
 
 \subsection{Stage~1: Semantic Video Prediction}
 \label{subsec:stage1}
@@ -230,38 +302,38 @@ During training, ground-truth semantic labels are used as conditioning (encoded 
 \subsection{Semantic VAE Losses}
 \label{subsec:vae_losses}
 
-The Semantic VAE is trained with a combination of boundary-weighted cross-entropy and Dice loss.
+As established in Section~\ref{subsec:semantic_native_vae}, the Semantic-Native VAE is trained with cross-entropy as the primary objective (Equation~\ref{eq:ce_loss}). In practice, we augment this base loss with two refinements: boundary weighting and Dice loss.
 
 \paragraph{Boundary-Weighted Cross-Entropy.}
-Standard cross-entropy treats all pixels equally, which causes the model to focus on large homogeneous regions while neglecting thin structures (e.g., poles) and class boundaries. We introduce pixel-wise weights based on a boundary mask:
+Standard cross-entropy treats all pixels equally, which causes the model to focus on large homogeneous regions (e.g., road, sky) while neglecting thin structures (e.g., poles, traffic signs) and class boundaries. To address this, we introduce pixel-wise weights based on a boundary mask:
 \begin{align}
-    \mathcal{L}_{\text{CE}} = \frac{\sum_{i \in \mathcal{V}} w_i \cdot \ell_{\text{CE}}(\mathbf{x}_i, y_i)}{\sum_{i \in \mathcal{V}} w_i}, \quad w_i = 1 + \alpha \cdot b_i,
+    \mathcal{L}_{\text{BCE}} = \frac{\sum_{i \in \mathcal{V}} w_i \cdot \ell_{\text{CE}}(\hat{\mathbf{s}}_i, y_i)}{\sum_{i \in \mathcal{V}} w_i}, \quad w_i = 1 + \alpha \cdot b_i,
     \label{eq:bce_loss}
 \end{align}
-where $\ell_{\text{CE}}(\mathbf{x}_i, y_i) = -\log p_{y_i}(\mathbf{x}_i)$ is the per-pixel cross-entropy, $b_i \in \{0, 1\}$ is the boundary mask, $\alpha$ is the boundary emphasis factor, and $\mathcal{V}$ is the set of valid (non-ignored) pixels.
+where $\ell_{\text{CE}}(\hat{\mathbf{s}}_i, y_i) = -\log\!\left(\text{softmax}(\hat{\mathbf{s}}_i)\right)_{y_i}$ is the per-pixel cross-entropy, $b_i \in \{0, 1\}$ is the boundary mask, $\alpha$ is the boundary emphasis factor, and $\mathcal{V}$ is the set of valid (non-ignored) pixels.
 
-The boundary mask is computed via max-min pooling with a $3 \times 3$ kernel:
+The boundary mask is computed efficiently via max-min pooling with a $3 \times 3$ kernel:
 \begin{align}
     b_i = \begin{cases} 1 & \text{if } \max_{j \in \mathcal{N}(i)} y_j \neq \min_{j \in \mathcal{N}(i)} y_j, \\ 0 & \text{otherwise,}\end{cases}
     \label{eq:boundary_mask}
 \end{align}
-where $\mathcal{N}(i)$ is the $3 \times 3$ neighborhood of pixel $i$. This efficiently identifies pixels at class transitions. With $\alpha = 4.0$, boundary pixels receive $5\times$ the loss weight of interior pixels.
+where $\mathcal{N}(i)$ is the $3 \times 3$ neighborhood of pixel $i$. This identifies pixels at class transitions without requiring explicit edge detection. With $\alpha = 4.0$, boundary pixels receive $5\times$ the loss weight of interior pixels, encouraging the model to preserve sharp class boundaries.
 
 \paragraph{Dice Loss.}
-To address class imbalance---vegetation may have over $1{,}000\times$ more pixels than traffic signs---we employ the soft Dice loss~\cite{milletari2016vnet}:
+To address class imbalance---vegetation may occupy over $1{,}000\times$ more pixels than traffic signs---we employ the soft Dice loss~\cite{milletari2016vnet}:
 \begin{align}
     \mathcal{L}_{\text{Dice}} = 1 - \frac{1}{C} \sum_{c=1}^{C} \frac{2 \sum_i p_{i,c} \cdot t_{i,c} + \epsilon}{\sum_i p_{i,c} + \sum_i t_{i,c} + \epsilon},
     \label{eq:dice_loss}
 \end{align}
-where $p_{i,c} = \text{softmax}(\mathbf{x}_i)_c$ is the predicted probability for class $c$ at pixel $i$, $t_{i,c}$ is the one-hot ground truth, and $\epsilon = 1$ is a smoothing constant. The Dice loss computes a per-class overlap measure and averages across classes, thereby treating all classes equally regardless of their pixel count.
+where $p_{i,c} = \text{softmax}(\hat{\mathbf{s}}_i)_c$ is the predicted probability for class $c$ at pixel $i$, $t_{i,c}$ is the one-hot ground truth, and $\epsilon = 1$ is a smoothing constant. The Dice loss computes a per-class overlap measure and averages across classes, thereby treating all classes equally regardless of their spatial prevalence.
 
 \paragraph{Combined Loss.}
 The total loss for Semantic VAE training is:
 \begin{align}
-    \mathcal{L}_{\text{VAE}} = \mathcal{L}_{\text{CE}} + \lambda_{\text{Dice}} \cdot \mathcal{L}_{\text{Dice}},
+    \mathcal{L}_{\text{VAE}} = \mathcal{L}_{\text{BCE}} + \lambda_{\text{Dice}} \cdot \mathcal{L}_{\text{Dice}},
     \label{eq:total_vae_loss}
 \end{align}
-where $\lambda_{\text{Dice}} = 0.5$ balances the two objectives.
+where $\lambda_{\text{Dice}} = 0.5$ balances the two objectives. The ablation of these loss components is presented in Section~\ref{subsec:loss_ablation}.
 
 \subsection{Diffusion Training Losses}
 \label{subsec:diffusion_losses}
