@@ -291,7 +291,7 @@ The model operates entirely in latent space. Three conditioning signals are prep
     \end{align}
     where $\mathbf{f}^{(0)} \in \mathbb{R}^{B \times 3 \times H \times W}$ is the initial RGB frame. This latent provides spatial appearance information that anchors the predicted semantic sequence.
 
-    \item \textbf{CLIP image embedding} $\mathbf{c}^{(0)} \in \mathbb{R}^{B \times 1 \times d_c}$: The initial RGB frame is resized to $224 \times 224$, normalized according to CLIP preprocessing, and passed through a frozen CLIP vision encoder (\texttt{CLIPVisionModelWithProjection}):
+    \item \textbf{CLIP image embedding} $\mathbf{c}^{(0)} \in \mathbb{R}^{B \times 1 \times d_c}$: The initial RGB frame is resized to $224 \times 224$, normalized according to CLIP preprocessing, and passed through a frozen CLIP vision encoder:
     \begin{align}
         \mathbf{c}^{(0)} = \text{CLIP}_{\text{enc}}(\mathbf{f}^{(0)}) \in \mathbb{R}^{B \times 1 \times d_c},
         \label{eq:clip_embedding}
@@ -307,7 +307,7 @@ Stage~1 follows the conditioning design of SVD, which uses two distinct pathways
     \mathbf{z}^{(0)}_{\text{pad}} &= \text{Repeat}(\mathbf{z}^{(0)}, T) \in \mathbb{R}^{B \times T \times 4 \times h \times w}, \label{eq:frame_padding} \\
     \mathbf{g} &= \left[\mathbf{s}^{(0)},\, \ldots,\, \mathbf{s}^{(k-1)},\, \mathbf{z}^{(0)},\, \ldots,\, \mathbf{z}^{(0)},\, \mathbf{s}^{(T-1)}\right] \in \mathbb{R}^{B \times T \times 4 \times h \times w}, \label{eq:cond_latents_stage1}
 \end{align}
-where $k$ denotes the number of initial conditioning semantic frames (\texttt{num\_cond\_bbox\_frames}). The conditioning tensor $\mathbf{g}$ thus contains: (i)~the first $k$ semantic frame latents, (ii)~the initial RGB frame latent repeated for the intermediate frames, and (iii)~the last semantic frame latent. This design provides both spatial anchoring (via the RGB frame) and temporal boundary constraints (via the first and last semantic frames).
+where $k$ denotes the number of initial conditioning semantic frames. The conditioning tensor $\mathbf{g}$ thus contains: (i)~the first $k$ semantic frame latents, (ii)~the initial RGB frame latent repeated for the intermediate frames, and (iii)~the last semantic frame latent. This design provides both spatial anchoring (via the RGB frame) and temporal boundary constraints (via the first and last semantic frames).
 
 The final UNet input is formed by concatenating the scaled noisy semantic latents with the conditioning tensor along the channel dimension:
 \begin{align}
@@ -330,7 +330,7 @@ SVD conditions on auxiliary metadata through sinusoidal time embeddings. Three q
     \item \textbf{Motion bucket ID} ($= 127$): Controls the expected amount of motion in the generated video,
     \item \textbf{Noise augmentation strength}: Indicates the noise level applied to the conditioning frame.
 \end{itemize}
-These are projected through sinusoidal embeddings and added element-wise to the diffusion time embedding via a learned linear projection (\texttt{add\_embedding}), ensuring that the UNet is aware of the temporal and noise characteristics of the input.
+These are projected through sinusoidal embeddings and added element-wise to the diffusion time embedding via a learned linear projection, ensuring that the UNet is aware of the temporal and noise characteristics of the input.
 
 \paragraph{Diffusion Objective.}
 The UNet predicts the noise added to the semantic latents. Following the EDM formulation~\cite{karras2022elucidating}, the model output is combined with the noisy input using learned skip connections:
