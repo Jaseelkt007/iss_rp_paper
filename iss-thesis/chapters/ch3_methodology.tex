@@ -131,7 +131,7 @@ The proposed pipeline, illustrated in Figure~\ref{fig:pipeline_overview}, consis
 \begin{figure}[t]
     \centering
     % TODO: Replace with actual pipeline diagram
-    \fbox{\parbox{0.9\textwidth}{\centering\vspace{3cm}\textbf{[Pipeline Overview Diagram]}\\\textit{Two-stage pipeline: Semantic VAE + Stage~1 Semantic Prediction + Stage~2 Semantic-to-Video}\vspace{3cm}}}
+    \includegraphics[width=0.9\textwidth]{images/ctrl_v_pipleline.png}
     \caption{Overview of the proposed two-stage pipeline for semantically controlled video generation. The Semantic VAE bridges discrete semantic maps and continuous latent space. Stage~1 predicts future semantic sequences. Stage~2 generates photorealistic RGB video conditioned on the predicted semantics.}
     \label{fig:pipeline_overview}
 \end{figure}
@@ -263,37 +263,219 @@ The Semantic Stem contains approximately 10,000 parameters and the Semantic Head
 \subsection{Stage~1: Semantic Video Prediction}
 \label{subsec:stage1}
 
-Stage~1 adapts the SVD backbone to predict semantic video sequences. The model receives:
+Stage~1 is responsible for predicting a temporally coherent sequence of semantic segmentation maps conditioned on a single RGB frame. This stage adapts the Stable Video Diffusion (SVD) backbone to operate in the latent space of semantic segmentation rather than RGB space. The model learns to generate plausible future scene layouts---road geometry, object positions, and semantic structure---from a single initial observation.
+
+\paragraph{Semantic Latent Encoding.}
+Ground-truth semantic segmentation maps are converted into continuous latent representations using the Semantic-Native VAE described in Section~\ref{subsec:semantic_native_vae}. The Semantic VAE is \emph{frozen} during Stage~1 training:
+\begin{align}
+    \mathbf{s} = \text{SemVAE}_{\text{enc}}(\mathbf{y}) \in \mathbb{R}^{B \times T \times 4 \times h \times w},
+    \label{eq:semantic_latent_enc}
+\end{align}
+where $\mathbf{y}$ denotes the semantic ID maps and $h = H/8 = 24$, $w = W/8 = 88$ at the training resolution of $192 \times 704$. This encoding produces a compact 4-channel latent representation that is compatible with the SVD latent space and amenable to diffusion modeling.
+
+\paragraph{Input Representation.}
+The model operates entirely in latent space. Three conditioning signals are prepared:
+
+\begin{enumerate}
+    \item \textbf{Noisy semantic latents} $\hat{\mathbf{s}}_t \in \mathbb{R}^{B \times T \times 4 \times h \times w}$: The diffusion target. Gaussian noise is added to the clean semantic latents $\mathbf{s}_0$ according to the EDM noise schedule:
+    \begin{align}
+        \hat{\mathbf{s}}_t = \alpha_t\, \mathbf{s}_0 + \sigma_t\, \boldsymbol{\epsilon}, \quad \boldsymbol{\epsilon} \sim \mathcal{N}(\mathbf{0}, \mathbf{I}).
+        \label{eq:noisy_semantic}
+    \end{align}
+    The noisy latents are then scaled by $\hat{\mathbf{s}}_t / \sqrt{\sigma^2 + 1}$ before being passed to the UNet, following the EDM preconditioning (Section~\ref{subsec:edm}).
+
+    \item \textbf{Initial RGB frame latent} $\mathbf{z}^{(0)} \in \mathbb{R}^{B \times 4 \times h \times w}$: The first frame of the driving video, encoded using the \emph{pretrained RGB VAE} (not the Semantic VAE):
+    \begin{align}
+        \mathbf{z}^{(0)} = \text{VAE}_{\text{enc}}(\mathbf{f}^{(0)}),
+        \label{eq:initial_frame_latent}
+    \end{align}
+    where $\mathbf{f}^{(0)} \in \mathbb{R}^{B \times 3 \times H \times W}$ is the initial RGB frame. This latent provides spatial appearance information that anchors the predicted semantic sequence.
+
+    \item \textbf{CLIP image embedding} $\mathbf{c}^{(0)} \in \mathbb{R}^{B \times 1 \times d_c}$: The initial RGB frame is resized to $224 \times 224$, normalized according to CLIP preprocessing, and passed through a frozen CLIP vision encoder (\texttt{CLIPVisionModelWithProjection}):
+    \begin{align}
+        \mathbf{c}^{(0)} = \text{CLIP}_{\text{enc}}(\mathbf{f}^{(0)}) \in \mathbb{R}^{B \times 1 \times d_c},
+        \label{eq:clip_embedding}
+    \end{align}
+    where $d_c = 1024$ is the CLIP embedding dimension. This embedding captures high-level semantic and scene context from the initial frame.
+\end{enumerate}
+
+\paragraph{Conditioning Mechanism.}
+Stage~1 follows the conditioning design of SVD, which uses two distinct pathways to inject conditioning information:
+
+\textit{Channel concatenation conditioning.} The initial frame latent $\mathbf{z}^{(0)}$ is temporally replicated to match the video length and concatenated along the channel dimension with the noisy semantic latents. Additionally, in the trajectory-conditioned variant, the first and last semantic frame latents are preserved in the conditioning tensor to provide boundary constraints:
+\begin{align}
+    \mathbf{z}^{(0)}_{\text{pad}} &= \text{Repeat}(\mathbf{z}^{(0)}, T) \in \mathbb{R}^{B \times T \times 4 \times h \times w}, \label{eq:frame_padding} \\
+    \mathbf{g} &= \left[\mathbf{s}^{(0)},\, \ldots,\, \mathbf{s}^{(k-1)},\, \mathbf{z}^{(0)},\, \ldots,\, \mathbf{z}^{(0)},\, \mathbf{s}^{(T-1)}\right] \in \mathbb{R}^{B \times T \times 4 \times h \times w}, \label{eq:cond_latents_stage1}
+\end{align}
+where $k$ denotes the number of initial conditioning semantic frames (\texttt{num\_cond\_bbox\_frames}). The conditioning tensor $\mathbf{g}$ thus contains: (i)~the first $k$ semantic frame latents, (ii)~the initial RGB frame latent repeated for the intermediate frames, and (iii)~the last semantic frame latent. This design provides both spatial anchoring (via the RGB frame) and temporal boundary constraints (via the first and last semantic frames).
+
+The final UNet input is formed by concatenating the scaled noisy semantic latents with the conditioning tensor along the channel dimension:
+\begin{align}
+    \mathbf{x}_{\text{in}} = \left[\hat{\mathbf{s}}_t / \sqrt{\sigma^2 + 1} \;\|\; \mathbf{g}\right] \in \mathbb{R}^{B \times T \times 8 \times h \times w},
+    \label{eq:unet_input_stage1}
+\end{align}
+where $\|$ denotes channel-wise concatenation. The UNet thus receives an 8-channel input per frame: 4 channels from the noisy semantic latents and 4 channels from the conditioning signal.
+
+\textit{Cross-attention conditioning.} The CLIP embedding $\mathbf{c}^{(0)}$ is injected via cross-attention layers inside the UNet. Specifically, the encoder hidden states are repeated across all $T$ frames:
+\begin{align}
+    \mathbf{c}_{\text{rep}} = \text{RepeatInterleave}(\mathbf{c}^{(0)}, T) \in \mathbb{R}^{(B \cdot T) \times 1 \times d_c},
+    \label{eq:clip_repeat}
+\end{align}
+and used as key and value inputs in the cross-attention layers of the \texttt{CrossAttnDownBlockSpatioTemporal} and \texttt{CrossAttnUpBlockSpatioTemporal} blocks. This provides global semantic context from the initial frame that guides the generation of all subsequent frames without requiring explicit per-frame conditioning.
+
+\paragraph{Additional Time Embeddings.}
+SVD conditions on auxiliary metadata through sinusoidal time embeddings. Three quantities are encoded and added to the diffusion timestep embedding:
 \begin{itemize}
-    \item $\hat{\mathbf{s}}_t \in \mathbb{R}^{T \times 4 \times h \times w}$: Noisy latent representation of the semantic video (being denoised),
-    \item $\mathbf{z}^{(0)} \in \mathbb{R}^{1 \times 4 \times h \times w}$: Latent encoding of the initial RGB frame (via the RGB VAE),
-    \item $\mathbf{c}^{(0)}$: CLIP encoding of the initial frame (for cross-attention conditioning),
+    \item \textbf{Frame rate} ($\text{fps} - 1$): Encodes the temporal sampling rate of the training data,
+    \item \textbf{Motion bucket ID} ($= 127$): Controls the expected amount of motion in the generated video,
+    \item \textbf{Noise augmentation strength}: Indicates the noise level applied to the conditioning frame.
 \end{itemize}
-where $h = H/8 = 24$ and $w = W/8 = 88$ at the training resolution of $192 \times 704$.
+These are projected through sinusoidal embeddings and added element-wise to the diffusion time embedding via a learned linear projection (\texttt{add\_embedding}), ensuring that the UNet is aware of the temporal and noise characteristics of the input.
 
-The initial frame latent is padded (repeated) along the temporal dimension and concatenated with the noisy semantic latents along the channel dimension, following the SVD conditioning mechanism. The UNet predicts the noise $\boldsymbol{\epsilon}_\theta(\hat{\mathbf{s}}_t, t, \mathbf{z}^{(0)}_{\text{pad}}, \mathbf{c}^{(0)})$ and is trained with the standard diffusion objective (Equation~\ref{eq:ddpm_loss}).
+\paragraph{Diffusion Objective.}
+The UNet predicts the noise added to the semantic latents. Following the EDM formulation~\cite{karras2022elucidating}, the model output is combined with the noisy input using learned skip connections:
+\begin{align}
+    \hat{\mathbf{s}}_{\text{denoised}} = c_{\text{out}}(\sigma) \cdot \boldsymbol{\epsilon}_\theta(\mathbf{x}_{\text{in}}, t, \mathbf{c}_{\text{rep}}, \mathbf{a}) + c_{\text{skip}}(\sigma) \cdot \hat{\mathbf{s}}_t,
+    \label{eq:edm_denoised_stage1}
+\end{align}
+where $c_{\text{out}}(\sigma) = -\sigma / \sqrt{\sigma^2 + 1}$, $c_{\text{skip}}(\sigma) = 1 / (\sigma^2 + 1)$, and $\mathbf{a}$ denotes the added time IDs. The training loss is a sigma-weighted MSE:
+\begin{align}
+    \mathcal{L}_{\text{Stage1}} = \mathbb{E}_{t,\, \mathbf{s}_0,\, \boldsymbol{\epsilon}}\!\left[w(\sigma) \cdot \left\|\hat{\mathbf{s}}_{\text{denoised}} - \mathbf{s}_0\right\|^2\right], \quad w(\sigma) = \frac{\sigma^2 + 1}{\sigma^2},
+    \label{eq:stage1_loss}
+\end{align}
+which upweights denoising at low noise levels, encouraging accurate reconstruction of fine structural details.
 
-The encoding of semantic IDs into latent space uses the trained Semantic VAE (frozen during Stage~1 training): semantic IDs $\rightarrow$ Semantic VAE encoder $\rightarrow$ semantic latents $\mathbf{s}$.
+\paragraph{Training Strategy.}
+The full SVD UNet is finetuned, with the option to restrict gradient updates to only the temporal transformer blocks after an initial warm-up period. This curriculum strategy first allows the model to adapt its full capacity to the semantic domain, then focuses optimization on the temporal layers that govern inter-frame consistency. The Semantic VAE, RGB VAE, and CLIP encoder all remain frozen throughout Stage~1 training.
+
+\paragraph{Design Rationale.}
+Separating semantic prediction from RGB generation provides several advantages:
+\begin{itemize}
+    \item \textbf{Reduced learning complexity:} The model learns scene \emph{structure} (where objects are and how they move) without simultaneously learning appearance (textures, lighting, colors).
+    \item \textbf{Structural consistency:} Operating in semantic space enforces that generated sequences maintain valid scene layouts.
+    \item \textbf{Parallel training:} Stages~1 and~2 can be trained independently, since Stage~2 uses ground-truth semantic maps during training.
+    \item \textbf{Modular design:} The semantic prediction module can be improved or replaced independently of the video generation module.
+\end{itemize}
+This decomposition mirrors the strategy of Ctrl-V~\cite{luo2025ctrlv}, where high-level structure (bounding box trajectories) is modeled before photorealistic synthesis.
 
 \subsection{Stage~2: Semantic-to-Video Generation}
 \label{subsec:stage2}
 
-Stage~2 generates photorealistic RGB videos conditioned on semantic maps using a ControlNet architecture~\cite{zhang2023adding} adapted to video. The model consists of:
+Stage~2 generates photorealistic RGB video conditioned on semantic segmentation maps. This stage uses a video-adapted ControlNet architecture~\cite{zhang2023adding} that injects semantic conditioning into the frozen SVD backbone, learning to translate semantic layouts into realistic driving scenes while preserving temporal coherence.
 
-\begin{itemize}
-    \item \textbf{SVD Backbone (frozen):} Receives the initial frame latent $\mathbf{z}^{(0)}_{\text{pad}}$ concatenated with noisy RGB video latents $\hat{\mathbf{z}}_t$, plus CLIP conditioning $\mathbf{c}^{(0)}$ via cross-attention.
-    
-    \item \textbf{ControlNet (trainable):} A copy of the SVD encoder blocks that receives the same noisy latents plus the semantic latents $\mathbf{s}$ (encoded by the Semantic VAE). The ControlNet output is injected into the SVD decoder via zero-initialized convolutions.
-\end{itemize}
+\paragraph{Architectural Overview.}
+Stage~2 consists of two parallel processing branches that share the same time embeddings and cross-attention conditioning:
 
-The training objective for Stage~2 is:
+\begin{enumerate}
+    \item \textbf{Frozen SVD Backbone} ($\theta$): The pretrained SVD UNet, kept entirely frozen. It receives the noisy RGB video latents concatenated with the initial frame conditioning and produces the denoised video prediction. The backbone preserves the high-quality video generation prior learned from large-scale data.
+
+    \item \textbf{Trainable ControlNet} ($\xi$): A copy of the SVD encoder and mid-block, initialized from the pretrained UNet weights. It receives the same 8-channel input as the backbone \emph{plus} the semantic latents as an additional control signal, and produces residual features that are injected into the frozen UNet decoder via zero-initialized convolution layers (see Section~\ref{subsec:controlnet}).
+\end{enumerate}
+
+\paragraph{Input Formation.}
+The inputs to Stage~2 are prepared as follows:
+
+\textit{RGB video encoding.} Ground-truth RGB video clips are encoded frame-by-frame using the frozen RGB VAE:
 \begin{align}
-    \mathcal{L}_{\text{Stage2}} = \mathbb{E}_{t, \mathbf{z}_0, \boldsymbol{\epsilon}}\!\left[\left\|\boldsymbol{\epsilon} - \boldsymbol{\epsilon}_{\theta,\xi}(\hat{\mathbf{z}}_t, t, \mathbf{z}^{(0)}_{\text{pad}}, \mathbf{c}^{(0)}, \mathbf{s})\right\|^2\right],
+    \mathbf{z}_0 = \text{VAE}_{\text{enc}}(\mathbf{f}_{1:T}) \in \mathbb{R}^{B \times T \times 4 \times h \times w},
+    \label{eq:rgb_latent_enc}
+\end{align}
+and scaled by the VAE scaling factor. Gaussian noise is added to produce noisy latents $\hat{\mathbf{z}}_t$ following the EDM schedule, identical to Equation~\eqref{eq:noisy_semantic} but applied to RGB latents.
+
+\textit{Initial frame conditioning.} The initial RGB frame is encoded with the RGB VAE and temporally replicated to $T$ frames:
+\begin{align}
+    \mathbf{z}^{(0)}_{\text{pad}} = \text{Repeat}\!\left(\text{VAE}_{\text{enc}}(\mathbf{f}^{(0)}),\, T\right) \in \mathbb{R}^{B \times T \times 4 \times h \times w}.
+    \label{eq:frame_padding_stage2}
+\end{align}
+This is concatenated with the scaled noisy RGB latents along the channel dimension:
+\begin{align}
+    \mathbf{x}_{\text{in}} = \left[\hat{\mathbf{z}}_t / \sqrt{\sigma^2 + 1} \;\|\; \mathbf{z}^{(0)}_{\text{pad}}\right] \in \mathbb{R}^{B \times T \times 8 \times h \times w},
+    \label{eq:unet_input_stage2}
+\end{align}
+providing an 8-channel input to both the frozen UNet backbone and the ControlNet.
+
+\textit{CLIP conditioning.} The initial RGB frame is processed through the frozen CLIP vision encoder (Equation~\ref{eq:clip_embedding}) and the resulting embedding is repeated across all $T$ frames. This embedding is used as key and value inputs in the cross-attention layers of both the frozen UNet and the ControlNet, providing global scene context.
+
+\textit{Semantic conditioning for ControlNet.} Ground-truth semantic segmentation maps are encoded using the frozen Semantic VAE:
+\begin{align}
+    \mathbf{s} = \text{SemVAE}_{\text{enc}}(\mathbf{y}_{1:T}) \in \mathbb{R}^{B \times T \times 4 \times h \times w}.
+    \label{eq:semantic_cond_stage2}
+\end{align}
+These semantic latents serve as the \emph{control condition} that is exclusive to the ControlNet branch.
+
+\paragraph{ControlNet Forward Pass.}
+The ControlNet processes its inputs through two parallel convolutions at the input layer:
+\begin{align}
+    \mathbf{h}_0 = \text{Conv}_{\text{in}}^{8 \rightarrow 320}(\mathbf{x}_{\text{in}}) + \text{Conv}_{\text{ctrl}}^{4 \rightarrow 320}(\mathbf{s}),
+    \label{eq:controlnet_input}
+\end{align}
+where $\text{Conv}_{\text{in}}$ is the standard UNet input convolution (copied from the pretrained weights) operating on the 8-channel concatenated input, and $\text{Conv}_{\text{ctrl}}$ is a separate convolution that projects the 4-channel semantic latents into the same 320-dimensional feature space. The semantic features are added to the main branch features, providing the control signal at the earliest network layer.
+
+The combined features then pass through the ControlNet's encoder blocks and mid-block---which have the same architecture as the SVD UNet encoder---producing residual features at each resolution level. These residuals are passed through zero-initialized $1 \times 1$ convolution layers and scaled by a conditioning scale factor $\gamma$:
+\begin{align}
+    \mathbf{r}_i &= \gamma \cdot \mathcal{Z}_i\!\left(\mathbf{h}_i^{\text{ctrl}}\right), \quad i \in \{1, \ldots, N_{\text{down}}\}, \label{eq:controlnet_residuals} \\
+    \mathbf{r}_{\text{mid}} &= \gamma \cdot \mathcal{Z}_{\text{mid}}\!\left(\mathbf{h}_{\text{mid}}^{\text{ctrl}}\right), \label{eq:controlnet_mid_residual}
+\end{align}
+where $\mathcal{Z}_i$ denotes the zero-initialized convolution at level $i$ and $\gamma$ is a scalar conditioning scale (default $\gamma = 1.0$). The zero initialization ensures the ControlNet contributes nothing at the start of training, preserving the pretrained SVD behavior.
+
+\paragraph{Frozen UNet Forward Pass with ControlNet Injection.}
+The frozen SVD UNet processes the same 8-channel input $\mathbf{x}_{\text{in}}$ through its encoder blocks, producing intermediate features $\{\mathbf{h}_i^{\text{unet}}\}$. At each decoder level, the ControlNet residuals are \emph{added} to the corresponding skip connections:
+\begin{align}
+    \tilde{\mathbf{h}}_i = \mathbf{h}_i^{\text{unet}} + \mathbf{r}_i.
+    \label{eq:skip_injection}
+\end{align}
+Similarly, the mid-block output receives the mid-block residual: $\tilde{\mathbf{h}}_{\text{mid}} = \mathbf{h}_{\text{mid}}^{\text{unet}} + \mathbf{r}_{\text{mid}}$. The modified features are then decoded by the frozen UNet decoder to produce the final noise prediction.
+
+The complete noise prediction can thus be written as:
+\begin{align}
+    \boldsymbol{\epsilon}_{\theta,\xi}(\hat{\mathbf{z}}_t, t, \mathbf{z}^{(0)}_{\text{pad}}, \mathbf{c}^{(0)}, \mathbf{s}) = \mathbb{U}_\theta\!\left(\mathbf{x}_{\text{in}}, t, \mathbf{c}^{(0)}_{\text{rep}}, \mathbf{a};\; \{\mathbf{r}_i\}_\xi,\, \mathbf{r}_{\text{mid},\xi}\right),
+    \label{eq:ctrlv_box2video}
+\end{align}
+where $\mathbb{U}_\theta$ is the frozen UNet with ControlNet residuals injected at the skip connections, $\theta$ denotes the frozen backbone parameters, and $\xi$ denotes the trainable ControlNet parameters.
+
+\paragraph{Training Objective.}
+The training follows the same EDM-preconditioned objective as Stage~1:
+\begin{align}
+    \mathcal{L}_{\text{Stage2}} = \mathbb{E}_{t,\, \mathbf{z}_0,\, \boldsymbol{\epsilon}}\!\left[w(\sigma) \cdot \left\|\hat{\mathbf{z}}_{\text{denoised}} - \mathbf{z}_0\right\|^2\right],
     \label{eq:stage2_loss}
 \end{align}
-where $\theta$ (SVD UNet) is frozen and only $\xi$ (ControlNet) is updated.
+where $\hat{\mathbf{z}}_{\text{denoised}}$ is computed using the EDM skip connections (Equation~\ref{eq:edm_denoised_stage1} applied to RGB latents). Only the ControlNet parameters $\xi$ are updated; the SVD UNet backbone $\theta$, VAE, and CLIP encoder remain frozen.
 
-During training, ground-truth semantic labels are used as conditioning (encoded via the Semantic VAE). This allows Stage~2 to be trained in parallel with Stage~1, since it does not depend on Stage~1 predictions. During inference, the semantic maps predicted by Stage~1 are used instead.
+\paragraph{Training Strategy.}
+A critical design choice is that Stage~2 uses \emph{ground-truth} semantic maps as conditioning during training, not the predictions from Stage~1. This decoupling provides two advantages:
+\begin{enumerate}
+    \item \textbf{Parallel training:} Stages~1 and~2 can be optimized independently and simultaneously, since Stage~2 does not depend on Stage~1 predictions during training.
+    \item \textbf{Training stability:} Ground-truth conditioning avoids the compounding of errors from imperfect Stage~1 predictions during the learning process.
+\end{enumerate}
+At \emph{inference} time, the pipeline operates sequentially: Stage~1 generates the semantic video sequence from the initial frame, and Stage~2 then generates the photorealistic RGB video conditioned on the Stage~1 output.
+
+\paragraph{Why Freeze the SVD Backbone?}
+Freezing the SVD UNet during Stage~2 training serves multiple purposes:
+\begin{itemize}
+    \item \textbf{Preserves the pretrained video prior:} The backbone retains its learned knowledge of natural video dynamics, appearance, and temporal coherence.
+    \item \textbf{Prevents catastrophic forgetting:} Training only the ControlNet prevents degradation of the pretrained generation quality.
+    \item \textbf{Parameter efficiency:} Only the ControlNet parameters are updated, reducing GPU memory requirements and accelerating convergence.
+    \item \textbf{Stable conditioning learning:} The ControlNet learns to \emph{steer} the frozen backbone rather than retrain it, inheriting the stability guarantees of the zero-initialized architecture (Section~\ref{subsec:controlnet}).
+\end{itemize}
+
+\paragraph{Full Inference Pipeline.}
+At inference, the complete pipeline operates as follows:
+\begin{enumerate}
+    \item \textbf{Input:} A single initial RGB frame $\mathbf{f}^{(0)}$.
+    \item \textbf{Stage~1:} The SVD UNet generates a sequence of semantic latents $\mathbf{s}_{1:T}$ conditioned on $\mathbf{f}^{(0)}$.
+    \item \textbf{Stage~2:} The frozen SVD backbone with ControlNet generates RGB video latents $\mathbf{z}_{1:T}$ conditioned on both $\mathbf{f}^{(0)}$ and the predicted $\mathbf{s}_{1:T}$.
+    \item \textbf{Decoding:} The RGB VAE decoder maps $\mathbf{z}_{1:T}$ back to pixel space, producing the final video $\hat{\mathbf{f}}_{1:T}$.
+\end{enumerate}
+
+\paragraph{Summary of the Two-Stage Design.}
+The key advantages of this decomposed architecture are:
+\begin{itemize}
+    \item \textbf{Structural control:} Semantic maps provide explicit, pixel-level scene specification.
+    \item \textbf{Modular stages:} Each stage can be trained, evaluated, and improved independently.
+    \item \textbf{Parallel training:} Ground-truth semantic conditioning enables simultaneous optimization.
+    \item \textbf{Strong temporal consistency:} Temporal attention in both stages ensures coherent frame-to-frame transitions.
+    \item \textbf{Efficient adaptation:} Frozen backbones with lightweight adapters (finetuned temporal layers in Stage~1, ControlNet in Stage~2) enable training with limited computational resources.
+\end{itemize}
 
 % -----------------------------------------------------------------
 \section{Loss Functions}
