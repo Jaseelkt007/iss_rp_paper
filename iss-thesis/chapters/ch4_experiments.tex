@@ -291,10 +291,18 @@ Table~\ref{tab:dice_ablation} shows the impact of Dice loss weight $\lambda_{\te
 The Dice loss provides a modest but consistent improvement (+1.7\% mIoU) with the most significant gains on rare classes (traffic signs: +4.0\%). There is a minor trade-off: pixel accuracy decreases by 0.1\%, reflecting the inherent tension between class-balanced optimization (Dice) and frequency-weighted optimization (CE).
 
 % -----------------------------------------------------------------
-\section{Video Generation Results}
-\label{sec:video_results}
+\section{Stage~1 Results: Semantic Video Prediction}
+\label{sec:stage1_results}
 
-This section presents the evaluation results for Stage~2 (Semantic-to-Video Generation). The evaluation assesses both the visual quality of generated RGB videos and the degree to which generated frames preserve the semantic structure specified by the conditioning maps. All results are reported on held-out validation clips from the KITTI-360 dataset.
+% TODO: Stage 1 evaluation results to be added once evaluation is complete.
+% This section will include quantitative metrics (FID, FVD, mIoU on predicted semantic sequences)
+% and qualitative examples of predicted semantic video sequences.
+
+% -----------------------------------------------------------------
+\section{Stage~2 Results: Semantic-to-Video Generation}
+\label{sec:stage2_results}
+
+This section presents the evaluation results for Stage~2, which generates RGB video frames conditioned on semantic segmentation maps via the ControlNet architecture. The evaluation assesses both the visual quality of generated RGB videos and the degree to which generated frames preserve the semantic structure specified by the conditioning maps. All results are reported on held-out validation clips from the KITTI-360 dataset.
 
 \subsection{Evaluation Protocol}
 \label{subsec:eval_protocol}
@@ -302,9 +310,9 @@ This section presents the evaluation results for Stage~2 (Semantic-to-Video Gene
 The Stage~2 evaluation follows a two-step protocol:
 
 \paragraph{Step~1: Generation and Semantic Fidelity.}
-A set of 15 validation clips (25 frames each, $192 \times 704$ resolution) is processed through the Stage~2 pipeline. For each clip, the initial RGB frame provides the appearance conditioning (via the RGB VAE and CLIP encoder), while the ground-truth semantic segmentation maps provide the structural conditioning (via the Semantic VAE). The ControlNet-augmented SVD backbone generates RGB video frames using 30 denoising steps with a linearly increasing guidance scale from 1.0 to 3.0.
+A total of 150 validation clips (25 frames each, $192 \times 704$ resolution) are processed through the Stage~2 pipeline. For each clip, the initial RGB frame provides the appearance conditioning (via the RGB VAE and CLIP encoder), while the ground-truth semantic segmentation maps provide the structural conditioning (via the Semantic VAE). The ControlNet-augmented SVD backbone generates RGB video frames using 30 denoising steps with a linearly increasing guidance scale from 1.0 to 3.0.
 
-To evaluate \emph{semantic fidelity}---i.e., how well the generated RGB frames respect the conditioning semantic layout---an independently trained Dilated Residual Network (DRN-D-105)~\cite{yu2017dilated} is applied to segment the generated RGB frames. The predicted segmentation maps are then compared against the ground-truth semantic labels using standard segmentation metrics (mIoU, pixel accuracy, per-class IoU). This protocol measures the degree to which the generated appearance faithfully reflects the intended scene structure, providing a proxy for controllability.
+To evaluate \emph{semantic fidelity}---i.e., how well the generated RGB frames respect the conditioning semantic layout---an independently trained Dilated Residual Network (DRN-D-105)~\cite{yu2017dilated} is applied to segment the generated RGB frames. The predicted segmentation maps are then compared against the ground-truth semantic labels using standard segmentation metrics (mIoU, pixel accuracy, frequency-weighted IoU, mean class accuracy). This protocol measures the degree to which the generated appearance faithfully reflects the intended scene structure, providing a proxy for controllability. Semantic fidelity metrics are computed on the full set of 150 clips (3{,}750 frames).
 
 \paragraph{Step~2: Image and Video Quality Metrics.}
 Perceptual and distributional quality metrics are computed between generated and ground-truth RGB frames:
@@ -315,44 +323,44 @@ Perceptual and distributional quality metrics are computed between generated and
     \item \textbf{Structural Similarity Index (SSIM)}~\cite{wang2004image}: Evaluates structural similarity between generated and ground-truth frames.
     \item \textbf{Peak Signal-to-Noise Ratio (PSNR)}: Measures pixel-level reconstruction accuracy.
 \end{itemize}
-These metrics are computed on 10 videos $\times$ 25 frames = 250 frame pairs for the quality evaluation.
+Due to storage and computational constraints during evaluation, these quality metrics are computed on a subset of 10 videos $\times$ 25 frames = 250 frame pairs.
 
 \subsection{Image and Video Quality}
 \label{subsec:image_video_quality}
 
-Table~\ref{tab:video_metrics} summarizes the image and video quality metrics for Stage~2.
+Table~\ref{tab:video_metrics} summarizes the image and video quality metrics for Stage~2, computed on 10 saved validation videos (250 frame pairs).
 
 \begin{table}[t]
     \centering
-    \caption{Stage~2 image and video quality metrics on KITTI-360 validation set}
+    \caption{Stage~2 image and video quality metrics on KITTI-360 validation set (10 videos, 250 frame pairs)}
     \label{tab:video_metrics}
-    \begin{tabular}{lcc}
+    \begin{tabular}{lc}
         \toprule
-        \textbf{Metric} & \textbf{Value} & \textbf{Interpretation} \\
+        \textbf{Metric} & \textbf{Value} \\
         \midrule
-        FID $\downarrow$ & \textbf{68.47} & Good (50--100 range) \\
-        FVD $\downarrow$ & 595.52 & Moderate \\
-        LPIPS $\downarrow$ & 0.334 & Moderate (0.2--0.4 range) \\
-        SSIM $\uparrow$ & 0.433 $\pm$ 0.137 & Moderate \\
-        PSNR $\uparrow$ (dB) & 14.51 $\pm$ 3.16 & Below average \\
+        FID $\downarrow$ & \textbf{68.47} \\
+        FVD $\downarrow$ & 595.52 \\
+        LPIPS $\downarrow$ & 0.334 \\
+        SSIM $\uparrow$ & 0.433 $\pm$ 0.137 \\
+        PSNR $\uparrow$ (dB) & 14.51 $\pm$ 3.16 \\
         \bottomrule
     \end{tabular}
 \end{table}
 
 \paragraph{FID.}
-The FID of \textbf{68.47} indicates that the generated frames have realistic appearance and diversity that is reasonably close to the ground-truth distribution within the KITTI-360 domain. This places the model in the \emph{good} quality range (50--100), confirming that the frozen SVD backbone successfully preserves its learned natural image prior while being steered by the ControlNet.
+The FID of \textbf{68.47} indicates that the generated frames have realistic appearance and diversity that is reasonably close to the ground-truth distribution within the KITTI-360 domain. This value falls in the good quality range (50--100), confirming that the frozen SVD backbone successfully preserves its learned natural image prior while being steered by the ControlNet conditioning.
 
 \paragraph{FVD.}
-The FVD of 595.52 reflects moderate temporal consistency. This metric captures both per-frame quality and inter-frame coherence via I3D video features. The higher value suggests some temporal variation between consecutive frames, which is expected for diffusion-based generation where each frame is denoised independently within a shared temporal attention framework. Notably, temporal coherence is primarily governed by the temporal transformer blocks inherited from SVD, and the ControlNet contributes spatial conditioning without explicit temporal smoothing.
+The FVD of 595.52 reflects moderate temporal consistency. This metric captures both per-frame quality and inter-frame coherence via I3D video features. The higher value suggests some temporal variation between consecutive frames, which is expected for diffusion-based generation where each frame is denoised within a shared temporal attention framework. Temporal coherence is primarily governed by the temporal transformer blocks inherited from SVD, and the ControlNet contributes spatial conditioning without explicit temporal smoothing.
 
 \paragraph{Perceptual and Pixel-Level Metrics.}
-The LPIPS of 0.334 indicates that generated frames are perceptually recognizable as depicting the same scene as the ground truth, with notable differences in fine details such as textures and lighting. The moderate SSIM (0.433) and PSNR (14.51~dB) are expected for generative models: unlike reconstruction-based approaches, diffusion models produce \emph{plausible} outputs rather than pixel-identical copies. These metrics are therefore less informative for evaluating generative quality than FID and semantic fidelity measures.
+The LPIPS of 0.334 indicates that generated frames are perceptually recognizable as depicting the same scene as the ground truth, with notable differences in fine details such as textures and lighting. The moderate SSIM (0.433) and PSNR (14.51~dB) are expected for generative models: unlike reconstruction-based approaches, diffusion models produce \emph{plausible} outputs rather than pixel-identical copies. These metrics are therefore less informative for evaluating generative quality than distributional measures (FID) and semantic fidelity metrics.
 
-Table~\ref{tab:per_video_quality} provides a per-video breakdown of structural and pixel-level metrics.
+Table~\ref{tab:per_video_quality} provides a per-video breakdown of structural and pixel-level metrics, illustrating the variation across different driving scenes.
 
 \begin{table}[t]
     \centering
-    \caption{Per-video SSIM and PSNR for Stage~2 generated clips}
+    \caption{Per-video SSIM and PSNR for the 10 saved Stage~2 validation clips}
     \label{tab:per_video_quality}
     \begin{tabular}{lcc}
         \toprule
@@ -374,108 +382,110 @@ Table~\ref{tab:per_video_quality} provides a per-video breakdown of structural a
     \end{tabular}
 \end{table}
 
-The per-video variation is considerable (SSIM range: 0.303--0.562), reflecting the diversity of scene complexity in the validation set. Clips with relatively static, well-structured scenes (Clip~1, Clip~2) achieve higher scores, while clips featuring complex dynamics or unusual viewpoints (Clip~5, Clip~8) exhibit lower similarity to the ground truth.
+The per-video variation is considerable (SSIM range: 0.303--0.562), reflecting the diversity of scene complexity in the validation set. Clips with relatively static, well-structured scenes (Clip~1, Clip~2) achieve higher similarity scores, while clips featuring complex dynamics or unusual viewpoints (Clip~5, Clip~8) exhibit lower similarity to the ground truth.
 
 \subsection{Semantic Fidelity}
 \label{subsec:semantic_fidelity}
 
-To evaluate whether the generated RGB frames faithfully encode the semantic structure specified by the conditioning maps, we apply a DRN-D-105 segmentation network~\cite{yu2017dilated} (trained on KITTI-360 with 19 classes) to the generated frames and compare the predicted segmentation against the ground-truth labels. This evaluation is conducted on 15 clips $\times$ 25 frames = 375 generated frames.
+To evaluate whether the generated RGB frames faithfully encode the semantic structure specified by the conditioning maps, we apply a pretrained DRN-D-105 segmentation network~\cite{yu2017dilated} (trained on KITTI-360 with 19 classes) to segment the generated RGB frames and compare the predicted segmentation against the ground-truth labels. This evaluation is conducted on the full set of 150 validation clips $\times$ 25 frames = 3{,}750 generated frames, providing a robust assessment of semantic fidelity across diverse driving scenarios.
 
 \paragraph{Overall Metrics.}
 Table~\ref{tab:semantic_fidelity} presents the overall semantic fidelity metrics.
 
 \begin{table}[t]
     \centering
-    \caption{Semantic fidelity of Stage~2 generated RGB frames, measured by applying DRN-D-105 segmentation to generated frames and comparing against ground-truth labels}
+    \caption{Semantic fidelity of Stage~2 generated RGB frames (150 clips, 3{,}750 frames), measured by applying DRN-D-105 segmentation to generated frames and comparing against ground-truth labels}
     \label{tab:semantic_fidelity}
     \begin{tabular}{lc}
         \toprule
         \textbf{Metric} & \textbf{Value} \\
         \midrule
-        mIoU & 47.12\% \\
-        Overall Pixel Accuracy & 89.05\% \\
-        Mean Class Accuracy & 67.58\% \\
-        Frequency-Weighted IoU & 80.89\% \\
+        mIoU & 45.60\% \\
+        Overall Pixel Accuracy & 89.19\% \\
+        Mean Class Accuracy & 60.87\% \\
+        Frequency-Weighted IoU & 81.01\% \\
         \bottomrule
     \end{tabular}
 \end{table}
 
-The mIoU of 47.12\% indicates that the generated RGB frames contain sufficient visual detail for an external segmentation network to recover a substantial portion of the intended semantic layout. The high pixel accuracy (89.05\%) and frequency-weighted IoU (80.89\%) demonstrate that large, spatially dominant classes are generated with high fidelity. The gap between pixel accuracy and mIoU reflects the challenge of correctly generating rare or small-scale classes.
+The mIoU of 45.60\% indicates that the generated RGB frames contain sufficient visual detail for an external segmentation network to recover a substantial portion of the intended semantic layout. The high pixel accuracy (89.19\%) and frequency-weighted IoU (81.01\%) demonstrate that large, spatially dominant classes are generated with high fidelity. The gap between pixel accuracy and mIoU reflects the challenge of correctly generating rare or small-scale classes, which contribute equally to the mIoU computation despite occupying a small fraction of image pixels.
 
 \paragraph{Per-Class Analysis.}
-Table~\ref{tab:stage2_per_class} presents the per-class IoU, revealing a clear pattern related to class frequency and spatial extent.
+Table~\ref{tab:stage2_per_class} presents the per-class IoU across all 19 semantic categories, revealing a clear pattern related to class frequency and spatial extent.
 
 \begin{table}[t]
     \centering
-    \caption{Per-class IoU for Stage~2 semantic fidelity evaluation. Classes are grouped by generation quality tier}
+    \caption{Per-class IoU for Stage~2 semantic fidelity evaluation (150 clips). Classes are grouped by generation quality tier}
     \label{tab:stage2_per_class}
-    \begin{tabular}{lcccc}
+    \begin{tabular}{lc}
         \toprule
-        \textbf{Class} & \textbf{IoU (\%)} & \textbf{Precision (\%)} & \textbf{Recall (\%)} & \textbf{F1 (\%)} \\
+        \textbf{Class} & \textbf{IoU (\%)} \\
         \midrule
-        \multicolumn{5}{l}{\textit{Well-generated (IoU $>$ 70\%)}} \\
-        Road         & \textbf{92.96} & 94.93 & 97.82 & 96.35 \\
-        Car          & \textbf{88.00} & 92.67 & 94.58 & 93.62 \\
-        Vegetation   & \textbf{84.47} & 90.84 & 92.34 & 91.58 \\
-        Sky          & \textbf{80.79} & 86.35 & 92.63 & 89.38 \\
-        Building     & \textbf{80.20} & 87.60 & 90.47 & 89.01 \\
-        Truck        & \textbf{70.81} & 81.42 & 84.46 & 82.91 \\
+        \multicolumn{2}{l}{\textit{Well-generated (IoU $>$ 70\%)}} \\
+        Road         & \textbf{90.09} \\
+        Car          & \textbf{88.75} \\
+        Sky          & \textbf{87.24} \\
+        Building     & \textbf{84.25} \\
+        Vegetation   & \textbf{82.35} \\
         \midrule
-        \multicolumn{5}{l}{\textit{Moderately generated (IoU 30--70\%)}} \\
-        Sidewalk     & 62.23 & 92.06 & 65.76 & 76.72 \\
-        Terrain      & 59.18 & 76.61 & 72.24 & 74.36 \\
-        Person       & 53.74 & 69.61 & 70.22 & 69.91 \\
-        Wall         & 43.50 & 54.57 & 68.19 & 60.63 \\
-        Fence        & 40.89 & 74.44 & 47.56 & 58.04 \\
-        Pole         & 33.93 & 47.27 & 54.60 & 50.67 \\
+        \multicolumn{2}{l}{\textit{Moderately generated (IoU 29--70\%)}} \\
+        Terrain      & 69.78 \\
+        Sidewalk     & 61.13 \\
+        Truck        & 55.25 \\
+        Fence        & 48.10 \\
+        Wall         & 45.35 \\
+        Pole         & 37.84 \\
+        Traffic Sign & 34.65 \\
+        Person       & 29.61 \\
+        Motorcycle   & 29.27 \\
         \midrule
-        \multicolumn{5}{l}{\textit{Poorly generated (IoU $<$ 30\%)}} \\
-        Traffic Sign & 29.04 & 41.55 & 49.10 & 45.01 \\
-        Rider        & 16.00 & 66.81 & 17.36 & 27.57 \\
-        Bicycle      & 12.41 & 33.85 & 16.39 & 22.08 \\
-        Bus          & 0.00 & 0.00 & --- & --- \\
-        Train        & 0.00 & 0.00 & --- & --- \\
-        Motorcycle   & 0.00 & 0.00 & --- & --- \\
+        \multicolumn{2}{l}{\textit{Poorly generated (IoU $<$ 20\%)}} \\
+        Rider        & 19.01 \\
+        Bicycle      & 3.66 \\
+        Traffic Light & 0.00 \\
+        Bus          & 0.00 \\
+        Train        & 0.00 \\
+        \midrule
+        \textbf{Mean IoU} & \textbf{45.60} \\
         \bottomrule
     \end{tabular}
 \end{table}
 
-The results reveal a clear three-tier structure:
+The results reveal a clear tiered structure:
 
 \begin{itemize}
-    \item \textbf{Well-generated classes (IoU $>$ 70\%):} Road (92.96\%), car (88.00\%), vegetation (84.47\%), sky (80.79\%), building (80.20\%), and truck (70.81\%). These are spatially dominant classes with clear visual patterns and large contiguous regions. The model generates these with high fidelity, confirming that the ControlNet successfully translates large-scale semantic structure into photorealistic appearance.
+    \item \textbf{Well-generated classes (IoU $>$ 70\%):} Road (90.09\%), car (88.75\%), sky (87.24\%), building (84.25\%), and vegetation (82.35\%). These five spatially dominant classes with large contiguous regions and clear visual patterns are generated with high fidelity, confirming that the ControlNet successfully translates large-scale semantic structure into photorealistic appearance.
 
-    \item \textbf{Moderately generated classes (IoU 30--70\%):} Sidewalk (62.23\%), terrain (59.18\%), person (53.74\%), wall (43.50\%), fence (40.89\%), and pole (33.93\%). These classes are either less frequent, smaller in spatial extent, or have more complex boundary structures. Notably, person achieves 53.74\% IoU, indicating that the model can generate recognizable human figures at the correct locations, though with imperfect detail.
+    \item \textbf{Moderately generated classes (IoU 29--70\%):} This tier spans a wide range, from terrain (69.78\%) and sidewalk (61.13\%) down to person (29.61\%) and motorcycle (29.27\%). These classes are either less frequent, smaller in spatial extent, or have more complex boundary structures. Notably, truck achieves 55.25\% IoU, demonstrating the model's ability to render large vehicle classes with reasonable fidelity. Pole (37.84\%) and traffic sign (34.65\%) reflect the difficulty of generating thin or small structures.
 
-    \item \textbf{Poorly generated classes (IoU $<$ 30\%):} Traffic sign (29.04\%), rider (16.00\%), bicycle (12.41\%), and bus/train/motorcycle (0.00\%). The latter three classes are completely absent from the evaluation clips, making their 0\% IoU uninformative rather than indicative of model failure. The low IoU for rider and bicycle reflects both their rarity in the training data and their fine-grained visual detail, which is challenging to reproduce at $192 \times 704$ resolution.
+    \item \textbf{Poorly generated classes (IoU $<$ 20\%):} Rider (19.01\%), bicycle (3.66\%), traffic light (0.00\%), bus (0.00\%), and train (0.00\%). Traffic light, bus, and train are absent from the evaluation clips, making their 0\% IoU uninformative rather than indicative of model failure. The low IoU for rider and bicycle reflects both their rarity in the training data and their fine-grained visual detail, which is challenging to reproduce at $192 \times 704$ resolution.
 \end{itemize}
 
-\paragraph{Per-Sample Variation.}
-Table~\ref{tab:per_sample_miou} presents the per-clip mIoU to illustrate the variation across different scenes.
+\paragraph{Confusion Matrix Analysis.}
+Figure~\ref{fig:confusion_matrix} presents the $19 \times 19$ confusion matrix obtained by applying DRN-D-105 to the generated frames. The matrix reveals several systematic confusion patterns that provide insight into the generation characteristics of the model.
 
-\begin{table}[t]
+\begin{figure}[t]
     \centering
-    \caption{Per-clip semantic fidelity (DRN mIoU and pixel accuracy) across 15 validation clips}
-    \label{tab:per_sample_miou}
-    \begin{tabular}{lcc|lcc}
-        \toprule
-        \textbf{Clip} & \textbf{mIoU} & \textbf{Pix.\ Acc.} & \textbf{Clip} & \textbf{mIoU} & \textbf{Pix.\ Acc.} \\
-        \midrule
-        0  & 50.23\% & 86.38\% & 8  & 27.10\% & 78.12\% \\
-        1  & 57.95\% & 91.47\% & 9  & 28.81\% & 86.39\% \\
-        2  & 59.69\% & 89.19\% & 10 & 36.35\% & 94.55\% \\
-        3  & 53.29\% & 88.68\% & 11 & 29.21\% & 94.58\% \\
-        4  & 58.95\% & 88.64\% & 12 & 34.52\% & 95.10\% \\
-        5  & 46.74\% & 86.42\% & 13 & 30.84\% & 89.59\% \\
-        6  & 46.32\% & 87.68\% & 14 & 41.45\% & 89.45\% \\
-        7  & 38.16\% & 91.00\% &    &         &         \\
-        \midrule
-        \multicolumn{3}{c}{\textbf{Average: 42.64\% / 89.15\%}} & & & \\
-        \bottomrule
-    \end{tabular}
-\end{table}
+    \includegraphics[width=0.85\textwidth]{images/stage2_confusion_matrix.png}
+    \caption{Confusion matrix for DRN-D-105 segmentation applied to Stage~2 generated RGB frames (150 clips, 3{,}750 frames). Rows correspond to ground-truth classes and columns to DRN predictions. The strong diagonal confirms high semantic fidelity for dominant classes (road, building, vegetation, sky, car). Off-diagonal entries reveal systematic confusions: sidewalk$\leftrightarrow$road, pole$\leftrightarrow$building, and rider$\leftrightarrow$person.}
+    \label{fig:confusion_matrix}
+\end{figure}
 
-The per-clip mIoU ranges from 27.10\% (Clip~8) to 59.69\% (Clip~2), reflecting substantial variation in scene complexity. Clips with higher mIoU tend to feature well-structured suburban scenes with clear road, building, and vegetation regions, while lower-performing clips often contain occluded objects, unusual viewpoints, or rare class instances.
+The strong diagonal entries for road, building, vegetation, sky, and car confirm that these classes are generated with high visual fidelity---the DRN network confidently and correctly segments them. Several notable off-diagonal patterns emerge:
+
+\begin{itemize}
+    \item \textbf{Sidewalk $\leftrightarrow$ road:} A portion of sidewalk pixels are predicted as road and vice versa. These classes share similar surface textures and are spatially adjacent, making boundary-precise generation particularly challenging.
+
+    \item \textbf{Pole $\leftrightarrow$ building:} Thin pole structures are frequently confused with building pixels. This reflects the difficulty of generating fine vertical structures at the operating resolution, where poles may span only a few pixels in width.
+
+    \item \textbf{Rider $\leftrightarrow$ person:} The rider class exhibits confusion with person, as these classes share similar visual appearance and differ primarily in the presence of an associated vehicle (bicycle or motorcycle).
+
+    \item \textbf{Fence $\leftrightarrow$ vegetation:} Fence pixels show notable confusion with vegetation, consistent with their frequent spatial co-occurrence in suburban driving scenes where fences border vegetated areas.
+
+    \item \textbf{Traffic sign $\leftrightarrow$ pole/vegetation:} Traffic signs are partially confused with surrounding pole and vegetation pixels, reflecting the challenge of generating small elevated objects against complex backgrounds.
+\end{itemize}
+
+These confusion patterns are largely expected given the visual similarity between the confused classes and the spatial resolution constraints. Importantly, they represent limitations of generating fine-grained details rather than fundamental failures in semantic conditioning.
 
 \subsection{Qualitative Results}
 \label{subsec:qualitative}
@@ -499,19 +509,11 @@ Several observations emerge from the qualitative analysis:
 \begin{itemize}
     \item \textbf{Global layout preservation:} The generated frames consistently reproduce the overall spatial arrangement of roads, buildings, vegetation, and sky regions. The ControlNet conditioning effectively translates the semantic map into a spatially coherent appearance.
 
-    \item \textbf{Object placement:} Vehicles, pedestrians, and other foreground objects appear at locations consistent with the conditioning semantic map. The car class is particularly well-reproduced, aligning with its high per-class IoU of 88.00\%.
+    \item \textbf{Object placement:} Vehicles, pedestrians, and other foreground objects appear at locations consistent with the conditioning semantic map. The car class is particularly well-reproduced, aligning with its high per-class IoU of 88.75\%.
 
     \item \textbf{Appearance plausibility:} The frozen SVD backbone contributes realistic textures, lighting, and color distributions. Generated frames exhibit natural-looking road surfaces, building facades, and vegetation, even though the specific pixel-level details differ from the ground truth.
 
     \item \textbf{Fine detail limitations:} Differences between generated and ground-truth frames are concentrated in fine-grained features: tree branch patterns, window details, and object edges. This is consistent with the moderate SSIM and PSNR scores, which penalize pixel-level deviations.
 
-    \item \textbf{Semantic consistency:} The DRN segmentation of generated frames (bottom-right) closely matches the ground-truth semantic map (bottom-left), confirming that the generated appearance encodes the correct semantic content. Minor discrepancies at class boundaries are visible, consistent with the gap between pixel accuracy (89.05\%) and mIoU (47.12\%).
+    \item \textbf{Semantic consistency:} The DRN segmentation of generated frames (bottom-right) closely matches the ground-truth semantic map (bottom-left), confirming that the generated appearance encodes the correct semantic content. Minor discrepancies at class boundaries are visible, consistent with the gap between pixel accuracy (89.19\%) and mIoU (45.60\%).
 \end{itemize}
-
-\begin{figure}[t]
-    \centering
-    % TODO: Replace with actual semantic VAE reconstruction examples
-    \fbox{\parbox{0.9\textwidth}{\centering\vspace{3cm}\textbf{[Semantic VAE Reconstruction Examples]}\\\textit{Input semantic labels | VAE reconstruction | Overlay showing boundary accuracy}\vspace{3cm}}}
-    \caption{Semantic VAE reconstruction quality. Left: input semantic label map. Center: reconstructed semantic map after VAE encode-decode cycle. Right: error overlay highlighting misclassified pixels (concentrated at class boundaries).}
-    \label{fig:vae_reconstruction}
-\end{figure}
