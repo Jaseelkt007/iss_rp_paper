@@ -284,30 +284,30 @@ The model operates entirely in latent space. Three conditioning signals are prep
     \end{align}
     The noisy latents are then scaled by $\hat{\mathbf{s}}_t / \sqrt{\sigma^2 + 1}$ before being passed to the UNet, following the EDM preconditioning (Section~\ref{subsec:edm}).
 
-    \item \textbf{Initial RGB frame latent} $\mathbf{z}^{(0)} \in \mathbb{R}^{B \times 4 \times h \times w}$: The first frame of the driving video, encoded using the \emph{pretrained RGB VAE} (not the Semantic VAE):
+    \item \textbf{Initial semantic frame latent} $\mathbf{s}^{(0)} \in \mathbb{R}^{B \times 4 \times h \times w}$: The first frame's semantic segmentation map, encoded using the \emph{frozen Semantic VAE}:
     \begin{align}
-        \mathbf{z}^{(0)} = \text{VAE}_{\text{enc}}(\mathbf{f}^{(0)}),
+        \mathbf{s}^{(0)} = \text{SemVAE}_{\text{enc}}(\mathbf{y}^{(0)}),
         \label{eq:initial_frame_latent}
     \end{align}
-    where $\mathbf{f}^{(0)} \in \mathbb{R}^{B \times 3 \times H \times W}$ is the initial RGB frame. This latent provides spatial appearance information that anchors the predicted semantic sequence.
+    where $\mathbf{y}^{(0)} \in \{0, \ldots, C-1\}^{B \times H \times W}$ is the semantic label map of the initial frame. This latent provides spatial structural information---road layout, object positions, and scene geometry---that anchors the predicted semantic sequence. Crucially, the conditioning latent is encoded with the same Semantic VAE used for the target latents, ensuring that both reside in the same latent space.
 
-    \item \textbf{CLIP image embedding} $\mathbf{c}^{(0)} \in \mathbb{R}^{B \times 1 \times d_c}$: The initial RGB frame is resized to $224 \times 224$, normalized according to CLIP preprocessing, and passed through a frozen CLIP vision encoder:
+    \item \textbf{CLIP image embedding} $\mathbf{c}^{(0)} \in \mathbb{R}^{B \times 1 \times d_c}$: The initial \emph{RGB} frame is resized to $224 \times 224$, normalized according to CLIP preprocessing, and passed through a frozen CLIP vision encoder:
     \begin{align}
         \mathbf{c}^{(0)} = \text{CLIP}_{\text{enc}}(\mathbf{f}^{(0)}) \in \mathbb{R}^{B \times 1 \times d_c},
         \label{eq:clip_embedding}
     \end{align}
-    where $d_c = 1024$ is the CLIP embedding dimension. This embedding captures high-level semantic and scene context from the initial frame.
+    where $\mathbf{f}^{(0)} \in \mathbb{R}^{B \times 3 \times H \times W}$ is the initial RGB frame and $d_c = 1024$ is the CLIP embedding dimension. The RGB frame is used \emph{exclusively} for this CLIP encoding step; it is not encoded via the RGB VAE. The CLIP embedding captures high-level semantic context---scene type, weather conditions, lighting, and overall environment---from the initial observation, providing complementary information to the spatial conditioning from the semantic latent.
 \end{enumerate}
 
 \paragraph{Conditioning Mechanism.}
 Stage~1 follows the conditioning design of SVD, which uses two distinct pathways to inject conditioning information:
 
-\textit{Channel concatenation conditioning.} The initial frame latent $\mathbf{z}^{(0)}$ is temporally replicated to match the video length and concatenated along the channel dimension with the noisy semantic latents. Additionally, in the trajectory-conditioned variant, the first and last semantic frame latents are preserved in the conditioning tensor to provide boundary constraints:
+\textit{Channel concatenation conditioning.} The initial semantic frame latent $\mathbf{s}^{(0)}$ is temporally replicated to match the video length and concatenated along the channel dimension with the noisy semantic latents. In the trajectory-conditioned variant, the first and last semantic frame latents are preserved in the conditioning tensor to provide boundary constraints:
 \begin{align}
-    \mathbf{z}^{(0)}_{\text{pad}} &= \text{Repeat}(\mathbf{z}^{(0)}, T) \in \mathbb{R}^{B \times T \times 4 \times h \times w}, \label{eq:frame_padding} \\
-    \mathbf{g} &= \left[\mathbf{s}^{(0)},\, \ldots,\, \mathbf{s}^{(k-1)},\, \mathbf{z}^{(0)},\, \ldots,\, \mathbf{z}^{(0)},\, \mathbf{s}^{(T-1)}\right] \in \mathbb{R}^{B \times T \times 4 \times h \times w}, \label{eq:cond_latents_stage1}
+    \mathbf{s}^{(0)}_{\text{pad}} &= \text{Repeat}(\mathbf{s}^{(0)}, T) \in \mathbb{R}^{B \times T \times 4 \times h \times w}, \label{eq:frame_padding} \\
+    \mathbf{g} &= \left[\mathbf{s}^{(0)},\, \ldots,\, \mathbf{s}^{(k-1)},\, \mathbf{s}^{(0)},\, \ldots,\, \mathbf{s}^{(0)},\, \mathbf{s}^{(T-1)}\right] \in \mathbb{R}^{B \times T \times 4 \times h \times w}, \label{eq:cond_latents_stage1}
 \end{align}
-where $k$ denotes the number of initial conditioning semantic frames. The conditioning tensor $\mathbf{g}$ thus contains: (i)~the first $k$ semantic frame latents, (ii)~the initial RGB frame latent repeated for the intermediate frames, and (iii)~the last semantic frame latent. This design provides both spatial anchoring (via the RGB frame) and temporal boundary constraints (via the first and last semantic frames).
+where $k$ denotes the number of initial conditioning semantic frames. The conditioning tensor $\mathbf{g}$ thus contains: (i)~the first $k$ semantic frame latents, (ii)~the initial semantic frame latent repeated for the intermediate frames, and (iii)~the last semantic frame latent. This design keeps the entire channel concatenation pathway within the semantic latent space, providing spatial structural anchoring (via the first semantic frame) and temporal boundary constraints (via the first and last semantic frames). The RGB appearance information enters exclusively through the CLIP cross-attention pathway.
 
 The final UNet input is formed by concatenating the scaled noisy semantic latents with the conditioning tensor along the channel dimension:
 \begin{align}
@@ -316,7 +316,7 @@ The final UNet input is formed by concatenating the scaled noisy semantic latent
 \end{align}
 where $\|$ denotes channel-wise concatenation. The UNet thus receives an 8-channel input per frame: 4 channels from the noisy semantic latents and 4 channels from the conditioning signal.
 
-\textit{Cross-attention conditioning.} The CLIP embedding $\mathbf{c}^{(0)}$ is injected via cross-attention layers inside the UNet. Specifically, the encoder hidden states are repeated across all $T$ frames:
+\textit{Cross-attention conditioning.} The CLIP embedding $\mathbf{c}^{(0)}$, derived from the initial RGB frame, is injected via cross-attention layers inside the UNet. This is the sole pathway through which RGB appearance information enters the Stage~1 model. Specifically, the encoder hidden states are repeated across all $T$ frames:
 \begin{align}
     \mathbf{c}_{\text{rep}} = \text{RepeatInterleave}(\mathbf{c}^{(0)}, T) \in \mathbb{R}^{(B \cdot T) \times 1 \times d_c},
     \label{eq:clip_repeat}
@@ -346,7 +346,7 @@ where $c_{\text{out}}(\sigma) = -\sigma / \sqrt{\sigma^2 + 1}$, $c_{\text{skip}}
 which upweights denoising at low noise levels, encouraging accurate reconstruction of fine structural details.
 
 \paragraph{Training Strategy.}
-The full SVD UNet is finetuned, with the option to restrict gradient updates to only the temporal transformer blocks after an initial warm-up period. This curriculum strategy first allows the model to adapt its full capacity to the semantic domain, then focuses optimization on the temporal layers that govern inter-frame consistency. The Semantic VAE, RGB VAE, and CLIP encoder all remain frozen throughout Stage~1 training.
+The full SVD UNet is finetuned, with the option to restrict gradient updates to only the temporal transformer blocks after an initial warm-up period. This curriculum strategy first allows the model to adapt its full capacity to the semantic domain, then focuses optimization on the temporal layers that govern inter-frame consistency. The Semantic VAE and CLIP encoder remain frozen throughout Stage~1 training. Note that the RGB VAE is not used in Stage~1; all latent encoding (both target and conditioning) is performed exclusively via the Semantic VAE, while the RGB image is only processed by the CLIP encoder for cross-attention conditioning.
 
 \paragraph{Design Rationale.}
 Separating semantic prediction from RGB generation provides several advantages:

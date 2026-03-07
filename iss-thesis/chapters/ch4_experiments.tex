@@ -294,9 +294,121 @@ The Dice loss provides a modest but consistent improvement (+1.7\% mIoU) with th
 \section{Stage~1 Results: Semantic Video Prediction}
 \label{sec:stage1_results}
 
-% TODO: Stage 1 evaluation results to be added once evaluation is complete.
-% This section will include quantitative metrics (FID, FVD, mIoU on predicted semantic sequences)
-% and qualitative examples of predicted semantic video sequences.
+This section presents the preliminary evaluation results for Stage~1, which predicts future semantic segmentation sequences conditioned on an initial RGB frame. The evaluation measures how accurately the diffusion model generates semantic label maps compared to the ground-truth annotations. All results are reported on held-out validation clips from the KITTI-360 dataset.
+
+\subsection{Evaluation Protocol}
+\label{subsec:stage1_eval_protocol}
+
+The Stage~1 model (checkpoint at training step 14{,}200) generates 25-frame semantic video sequences at $192 \times 704$ resolution using 30 denoising steps. The generated semantic latents are decoded via the frozen Semantic VAE to produce per-pixel class predictions, which are compared against ground-truth semantic labels using standard segmentation metrics. The current evaluation is conducted on a preliminary set of 10 validation clips (250 frames total); a comprehensive evaluation on the full validation set will be reported in a future revision.
+
+\subsection{Overall Metrics}
+\label{subsec:stage1_overall}
+
+Table~\ref{tab:stage1_overall} presents the overall semantic prediction quality metrics.
+
+\begin{table}[t]
+    \centering
+    \caption{Stage~1 semantic prediction quality (10 validation clips, 250 frames). Checkpoint: step~14{,}200}
+    \label{tab:stage1_overall}
+    \begin{tabular}{lc}
+        \toprule
+        \textbf{Metric} & \textbf{Value} \\
+        \midrule
+        mIoU & 42.93\% \\
+        Overall Pixel Accuracy & 81.10\% \\
+        Mean Class Accuracy & 53.43\% \\
+        Frequency-Weighted IoU & 69.19\% \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+The mIoU of 42.93\% indicates that the diffusion model captures the broad semantic structure of driving scenes---road layout, building placement, vegetation distribution---while struggling with fine-grained and rare classes. The pixel accuracy of 81.10\% and frequency-weighted IoU of 69.19\% confirm that spatially dominant classes are predicted reliably. The gap between pixel accuracy and mIoU reflects the well-known sensitivity of mIoU to rare classes, which contribute equally to the metric despite occupying a small fraction of image pixels.
+
+\subsection{Per-Class Analysis}
+\label{subsec:stage1_per_class}
+
+Table~\ref{tab:stage1_per_class} presents the per-class IoU, precision, recall, and F1 score, revealing a clear performance hierarchy tied to class frequency and spatial extent.
+
+\begin{table}[t]
+    \centering
+    \caption{Per-class results for Stage~1 semantic prediction (10 clips, 250 frames)}
+    \label{tab:stage1_per_class}
+    \begin{tabular}{lcccc}
+        \toprule
+        \textbf{Class} & \textbf{IoU (\%)} & \textbf{Precision (\%)} & \textbf{Recall (\%)} & \textbf{F1 (\%)} \\
+        \midrule
+        Road        & \textbf{89.81} & 94.13 & 95.14 & 94.63 \\
+        Sky         & 76.61 & 88.53 & 85.05 & 86.76 \\
+        Building    & 73.70 & 84.80 & 84.91 & 84.86 \\
+        Vegetation  & 68.62 & 81.58 & 81.19 & 81.39 \\
+        Sidewalk    & 65.27 & 77.02 & 81.05 & 78.99 \\
+        Car         & 60.69 & 73.88 & 77.27 & 75.54 \\
+        Truck       & 59.99 & 62.24 & 94.32 & 74.99 \\
+        Terrain     & 38.95 & 73.18 & 45.44 & 56.06 \\
+        Fence       & 37.71 & 60.16 & 50.26 & 54.77 \\
+        Wall        & 35.56 & 52.09 & 52.85 & 52.46 \\
+        Traffic Sign & 13.61 & 28.38 & 20.73 & 23.96 \\
+        Rider       & 12.88 & 79.05 & 13.33 & 22.82 \\
+        Pole        & 10.50 & 18.12 & 19.96 & 19.00 \\
+        Person      & 0.00 & --- & 0.00 & --- \\
+        Bicycle     & 0.00 & --- & 0.00 & --- \\
+        \midrule
+        Traffic Light & \multicolumn{4}{c}{N/A (absent from evaluation clips)} \\
+        Bus         & \multicolumn{4}{c}{N/A (absent from evaluation clips)} \\
+        Train       & \multicolumn{4}{c}{N/A (absent from evaluation clips)} \\
+        Motorcycle  & \multicolumn{4}{c}{N/A (absent from evaluation clips)} \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+The results exhibit a clear tiered structure:
+
+\begin{itemize}
+    \item \textbf{Well-predicted classes (IoU $>$ 60\%):} Road (89.81\%), sky (76.61\%), building (73.70\%), vegetation (68.62\%), sidewalk (65.27\%), car (60.69\%), and truck (59.99\%). These spatially dominant classes with large contiguous regions are predicted with high fidelity, demonstrating that the model successfully learns the overall scene layout and major object placement from the initial RGB frame.
+
+    \item \textbf{Moderately predicted classes (IoU 30--60\%):} Terrain (38.95\%), fence (37.71\%), and wall (35.56\%). These classes are less frequent and often occupy irregular, elongated regions that are more challenging to predict temporally.
+
+    \item \textbf{Poorly predicted classes (IoU $<$ 20\%):} Traffic sign (13.61\%), rider (12.88\%), pole (10.50\%), person (0.00\%), and bicycle (0.00\%). These rare, small-scale classes are extremely difficult to predict in future frames. The model fails entirely on person and bicycle, which together account for fewer than 25{,}000 ground-truth pixels across all evaluation clips. Notably, rider achieves a high precision (79.05\%) but very low recall (13.33\%), indicating that when the model does predict rider pixels, it is usually correct, but it vastly under-predicts the class extent.
+\end{itemize}
+
+\subsection{Per-Sample Variation}
+\label{subsec:stage1_per_sample}
+
+Table~\ref{tab:stage1_per_sample} shows the per-clip mIoU and pixel accuracy, illustrating the variation across different driving scenes.
+
+\begin{table}[t]
+    \centering
+    \caption{Per-clip mIoU and pixel accuracy for Stage~1 (10 clips)}
+    \label{tab:stage1_per_sample}
+    \begin{tabular}{lcc}
+        \toprule
+        \textbf{Clip} & \textbf{mIoU (\%)} & \textbf{Pixel Acc.\ (\%)} \\
+        \midrule
+        0  & 55.00 & 82.25 \\
+        1  & 55.65 & 87.35 \\
+        2  & 46.55 & 81.31 \\
+        3  & 49.47 & 78.62 \\
+        4  & 50.13 & 80.79 \\
+        5  & 37.54 & 71.73 \\
+        6  & 42.92 & 77.96 \\
+        7  & 44.17 & 86.96 \\
+        8  & 36.28 & 77.65 \\
+        9  & 42.08 & 86.81 \\
+        \midrule
+        \textbf{Average} & \textbf{45.98} & \textbf{81.14} \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+The per-clip mIoU ranges from 36.28\% to 55.65\%, reflecting the diversity of scene complexity in the validation set. Clips with relatively static, well-structured scenes (Clips~0, 1) achieve higher prediction quality, while clips featuring complex dynamics or uncommon scene configurations (Clips~5, 8) exhibit lower accuracy. The per-sample average mIoU (45.98\%) is slightly higher than the overall mIoU (42.93\%) because the per-sample metric first computes mIoU within each clip and then averages, whereas the overall metric pools all pixels globally before computing per-class IoU.
+
+\subsection{Comparison with Stage~2 Semantic Fidelity}
+\label{subsec:stage1_vs_stage2}
+
+It is instructive to compare the Stage~1 semantic prediction metrics with the Stage~2 semantic fidelity metrics (Table~\ref{tab:semantic_fidelity}). Stage~1 achieves a mIoU of 42.93\% in direct semantic prediction, while Stage~2 achieves 45.60\% mIoU as measured by re-segmenting the generated RGB frames with DRN-D-105. The comparable performance levels suggest that the primary bottleneck in the full pipeline lies in predicting accurate future semantic layouts (Stage~1) rather than translating those layouts into photorealistic appearance (Stage~2). This finding supports the modular design: improvements to Stage~1 prediction quality would directly translate to improved end-to-end generation quality.
+
+\paragraph{Limitations.}
+The current evaluation is based on a preliminary set of 10 validation clips due to computational constraints. A comprehensive evaluation on the full validation set, including temporal consistency metrics and qualitative analysis, will be reported in a future revision.
 
 % -----------------------------------------------------------------
 \section{Stage~2 Results: Semantic-to-Video Generation}
