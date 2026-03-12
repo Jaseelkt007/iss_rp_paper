@@ -6,6 +6,7 @@
 
 This chapter describes the dataset, evaluation metrics, the proposed model architectures, and the loss functions employed in this work.
 
+\FloatBarrier
 % -----------------------------------------------------------------
 \section{Dataset: KITTI-360}
 \label{sec:dataset}
@@ -63,6 +64,7 @@ Key preprocessing steps:
 
 The training set contains approximately 49,000 frame pairs. For Semantic VAE training, a subset of 500 clips (2,000 frames at $T=4$) is used due to the small number of trainable parameters, with 200 clips reserved for validation.
 
+\FloatBarrier
 % -----------------------------------------------------------------
 \section{Evaluation Metrics}
 \label{sec:metrics}
@@ -113,6 +115,7 @@ In addition to FID and FVD, we report several complementary metrics:
     \item \textbf{PSNR} (Peak Signal-to-Noise Ratio): Measures pixel-level reconstruction quality in decibels. Higher values indicate less distortion.
 \end{itemize}
 
+\FloatBarrier
 % -----------------------------------------------------------------
 \section{Model Architecture}
 \label{sec:architecture}
@@ -307,7 +310,7 @@ Stage~1 follows the conditioning design of SVD, which uses two distinct pathways
     \mathbf{s}^{(0)}_{\text{pad}} &= \text{Repeat}(\mathbf{s}^{(0)}, T) \in \mathbb{R}^{B \times T \times 4 \times h \times w}, \label{eq:frame_padding} \\
     \mathbf{g} &= \left[\mathbf{s}^{(0)},\, \ldots,\, \mathbf{s}^{(k-1)},\, \mathbf{s}^{(0)},\, \ldots,\, \mathbf{s}^{(0)},\, \mathbf{s}^{(T-1)}\right] \in \mathbb{R}^{B \times T \times 4 \times h \times w}, \label{eq:cond_latents_stage1}
 \end{align}
-where $k$ denotes the number of initial conditioning semantic frames. The conditioning tensor $\mathbf{g}$ thus contains: (i)~the first $k$ semantic frame latents, (ii)~the initial semantic frame latent repeated for the intermediate frames, and (iii)~the last semantic frame latent. This design keeps the entire channel concatenation pathway within the semantic latent space, providing spatial structural anchoring (via the first semantic frame) and temporal boundary constraints (via the first and last semantic frames). The RGB appearance information enters exclusively through the CLIP cross-attention pathway.
+where $k$ denotes the number of initial conditioning semantic frames. The conditioning tensor $\mathbf{g}$ thus contains: (i)~the first $k$ semantic frame latents, (ii)~the initial semantic frame latent repeated for the intermediate frames, and (iii)~the last semantic frame latent for the final position. A critical design requirement is that all conditioning latents---including the repeated intermediate frames---must be encoded using the \emph{same} Semantic VAE as the target latents. Mixing encoders (e.g., using the RGB VAE for intermediate frames) would introduce incompatible latent distributions that the UNet cannot reconcile, as the semantic and RGB latent spaces have fundamentally different statistical properties. This design keeps the entire channel concatenation pathway within the semantic latent space, providing spatial structural anchoring (via the first semantic frame) and temporal boundary constraints (via the first and last semantic frames). The RGB appearance information enters exclusively through the CLIP cross-attention pathway.
 
 The final UNet input is formed by concatenating the scaled noisy semantic latents with the conditioning tensor along the channel dimension:
 \begin{align}
@@ -477,6 +480,7 @@ The key advantages of this decomposed architecture are:
     \item \textbf{Efficient adaptation:} Frozen backbones with lightweight adapters (finetuned temporal layers in Stage~1, ControlNet in Stage~2) enable training with limited computational resources.
 \end{itemize}
 
+\FloatBarrier
 % -----------------------------------------------------------------
 \section{Loss Functions}
 \label{sec:losses}
