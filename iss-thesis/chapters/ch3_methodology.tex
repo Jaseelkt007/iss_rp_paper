@@ -82,12 +82,22 @@ Lower FID scores indicate higher similarity between generated and real image dis
 \subsection{Fr\'echet Video Distance (FVD)}
 \label{subsec:fvd}
 
-The Fr\'echet Video Distance (FVD)~\cite{unterthiner2019fvd} extends FID to the video domain by using features from an Inflated 3D ConvNet (I3D)~\cite{carreira2017quo} pretrained on Kinetics-400. The I3D network captures both spatial appearance and temporal dynamics:
+The Fr\'echet Video Distance (FVD)~\cite{unterthiner2019fvd} extends the Fr\'echet Inception Distance to the video domain by comparing distributions of real and generated videos in a learned spatiotemporal feature space. Unlike FID, which evaluates individual frames independently, FVD processes short video clips and therefore captures both visual appearance and temporal dynamics, making it suitable for evaluating generative video models.
+
+Each video is first mapped to a fixed-dimensional feature representation using a pretrained video encoder. A short clip of frames is sampled from the video, resized to the input resolution expected by the encoder, and passed through the network. The feature vector is extracted from the penultimate representation layer after global spatiotemporal pooling, producing a single embedding that summarises the entire clip. Consequently, each video contributes exactly one feature vector to the distribution used for FVD computation.
+
+Following the formulation of FID, the distributions of real and generated video features are each approximated by a multivariate Gaussian. Let $\mathcal{N}(\boldsymbol{\mu}_r, \boldsymbol{\Sigma}_r)$ and $\mathcal{N}(\boldsymbol{\mu}_g, \boldsymbol{\Sigma}_g)$ denote the Gaussian distributions fitted to the feature embeddings of real and generated videos, respectively. The Fr\'echet distance between these two distributions is then given by
 \begin{align}
-    \text{FVD} = \|\boldsymbol{\mu}_r^{\text{I3D}} - \boldsymbol{\mu}_g^{\text{I3D}}\|^2 + \text{Tr}\!\left(\boldsymbol{\Sigma}_r^{\text{I3D}} + \boldsymbol{\Sigma}_g^{\text{I3D}} - 2\left(\boldsymbol{\Sigma}_r^{\text{I3D}} \boldsymbol{\Sigma}_g^{\text{I3D}}\right)^{1/2}\right).
+    \text{FVD} = \|\boldsymbol{\mu}_r - \boldsymbol{\mu}_g\|_2^2 + \text{Tr}\!\left(\boldsymbol{\Sigma}_r + \boldsymbol{\Sigma}_g - 2\left(\boldsymbol{\Sigma}_r \boldsymbol{\Sigma}_g\right)^{1/2}\right).
     \label{eq:fvd}
 \end{align}
-FVD evaluates both the visual quality and temporal coherence of generated videos. Lower values are better.
+Lower FVD values indicate that the generated videos are closer to the real videos in the learned feature space, reflecting improved visual realism and temporal coherence.
+
+In this work, two different feature backbones are used to compute FVD. The first follows the original formulation based on the Inflated 3D ConvNet (I3D)~\cite{carreira2017quo} pretrained on the Kinetics-400 dataset. I3D employs 3D convolutional filters that jointly model spatial and temporal information and produces a 1024-dimensional video embedding.
+
+The second evaluation uses a content-debiased FVD (CD-FVD)~\cite{ge2024cdfvd} representation based on a pretrained VideoMAE encoder~\cite{tong2022videomae}, a transformer-based model trained using masked video modelling. VideoMAE provides a general spatiotemporal representation that reduces bias towards specific action categories present in the I3D training data and improves sensitivity to motion consistency. In this variant, feature embeddings are extracted from the final pooled representation of the VideoMAE encoder before computing the Fr\'echet distance.
+
+To obtain stable estimates of the Gaussian statistics, FVD is computed over a sufficiently large set of video samples. Following common evaluation practice, approximately 2048 generated videos are used to estimate the feature distributions. Importantly, the sample count refers to the number of video clips rather than individual frames, as each clip contributes a single feature embedding to the distribution.
 
 \subsection{Mean Intersection-over-Union (mIoU)}
 \label{subsec:miou}
