@@ -451,77 +451,128 @@ Controllable diffusion models address this limitation by augmenting pretrained d
 \label{subsec:controlnet}
 
 \paragraph{Motivation.}
-Pretrained diffusion models such as Stable Diffusion learn powerful image priors from large-scale datasets. However, fine-tuning the entire UNet to incorporate new conditioning signals often leads to:
+Pretrained diffusion models such as Stable Diffusion learn powerful image priors from large-scale datasets. However, incorporating additional conditioning signals---such as edge maps, depth maps, or semantic segmentation masks---typically requires fine-tuning the entire UNet. This approach can lead to several fundamental issues:
 \begin{itemize}
     \item Loss of pretrained generative quality,
-    \item Overfitting on small control datasets,
+    \item Overfitting on small conditioning datasets,
     \item Catastrophic forgetting of the learned image prior.
 \end{itemize}
-ControlNet~\cite{zhang2023adding} was proposed to solve this problem by enabling spatial conditioning \emph{without modifying the pretrained backbone weights}.
+ControlNet~\cite{zhang2023adding} addresses this limitation by introducing a trainable conditioning branch that preserves the pretrained diffusion backbone while enabling strong spatial control.
 
-\paragraph{Core Architecture.}
-ControlNet creates a \emph{trainable copy} of the encoder blocks of a pretrained UNet while keeping the original UNet \emph{frozen}. Let:
+\paragraph{Architecture Overview.}
+ControlNet augments the diffusion UNet with a parallel encoder network that processes the conditioning signal and produces multi-scale feature residuals. These residuals are injected into the frozen UNet at corresponding encoder stages. Let:
 \begin{itemize}
-    \item $\mathcal{F}(\cdot;\, \Theta)$ be the pretrained (frozen) UNet block,
-    \item $\mathcal{F}(\cdot;\, \Theta_c)$ be its trainable copy,
-    \item $\mathbf{c}$ be the conditioning signal (e.g., edge map, depth map, segmentation mask),
-    \item $\mathcal{Z}(\cdot;\, \Theta_z)$ be zero-initialized convolution layers.
+    \item $\mathbf{x}_t \in \mathbb{R}^{C \times H \times W}$ denote the noisy latent input at diffusion timestep $t$,
+    \item $\mathbf{c}$ denote the conditioning signal (e.g., segmentation map),
+    \item $\mathcal{E}_i(\cdot)$ denote the $i$-th encoder block of the pretrained (frozen) UNet,
+    \item $\tilde{\mathcal{E}}_i(\cdot)$ denote the corresponding trainable ControlNet encoder block,
+    \item $\mathcal{Z}_i(\cdot)$ denote a zero-initialized $1 \times 1$ convolution layer.
 \end{itemize}
-The modified block output is:
+
+The frozen UNet encoder computes hierarchical features as:
 \begin{align}
-    \mathbf{y}_c = \mathcal{F}(\mathbf{x};\, \Theta) + \mathcal{Z}\!\left(\mathcal{F}\!\left(\mathbf{x} + \mathcal{Z}(\mathbf{c};\, \Theta_{z1});\, \Theta_c\right);\, \Theta_{z0}\right).
+    \mathbf{h}_i = \mathcal{E}_i(\mathbf{h}_{i-1}),
+    \label{eq:unet_encoder}
+\end{align}
+while the ControlNet branch independently processes the conditioning signal:
+\begin{align}
+    \tilde{\mathbf{h}}_i = \tilde{\mathcal{E}}_i(\tilde{\mathbf{h}}_{i-1}).
+    \label{eq:controlnet_encoder}
+\end{align}
+At each encoder stage $i$, the ControlNet feature map is projected via a zero-initialized $1 \times 1$ convolution to produce a residual tensor:
+\begin{align}
+    \mathbf{r}_i = \mathcal{Z}_i(\tilde{\mathbf{h}}_i), \quad \mathbf{r}_i \in \mathbb{R}^{C_i \times H_i \times W_i}.
+    \label{eq:controlnet_residual}
+\end{align}
+This residual is added element-wise to the corresponding frozen UNet feature map:
+\begin{align}
+    \mathbf{h}_i^c = \mathbf{h}_i + \mathbf{r}_i.
+    \label{eq:controlnet_injection}
+\end{align}
+Residual injection is performed at multiple encoder levels, typically after each downsampling block and the mid block of the UNet. At the level of individual network blocks, the full ControlNet output can be written as:
+\begin{align}
+    \mathbf{y}_c = \mathcal{F}(\mathbf{x};\, \Theta) + \mathcal{Z}\!\left(\mathcal{F}\!\left(\mathbf{x} + \mathcal{Z}(\mathbf{c};\, \Theta_{z1});\, \Theta_c\right);\, \Theta_{z0}\right),
     \label{eq:controlnet}
 \end{align}
+where $\mathcal{F}(\cdot;\,\Theta)$ is the pretrained frozen block, $\mathcal{F}(\cdot;\,\Theta_c)$ is its trainable copy, and $\mathcal{Z}(\cdot;\,\Theta_{z0})$, $\mathcal{Z}(\cdot;\,\Theta_{z1})$ are the zero-initialized convolutions.
 
 \paragraph{Step-by-Step Interpretation.}
 Equation~\eqref{eq:controlnet} can be understood through four sequential operations:
 
 \begin{enumerate}
-    \item \textbf{Baseline generation} --- $\mathcal{F}(\mathbf{x};\, \Theta)$: This is the original pretrained diffusion block. At initialization, the model behaves exactly like the original diffusion model, producing the same output as if no conditioning were present.
+    \item \textbf{Baseline generation} --- $\mathcal{F}(\mathbf{x};\, \Theta)$: The original frozen diffusion block computes its standard output. At initialization, the model behaves identically to the pretrained diffusion model.
 
-    \item \textbf{Conditioning injection} --- $\mathbf{x} + \mathcal{Z}(\mathbf{c};\, \Theta_{z1})$: The conditioning signal $\mathbf{c}$ is passed through a zero-initialized convolution layer. Because all weights are initialized to zero:
+    \item \textbf{Conditioning injection} --- $\mathbf{x} + \mathcal{Z}(\mathbf{c};\, \Theta_{z1})$: The conditioning signal $\mathbf{c}$ is passed through a zero-initialized convolution. Because all weights are initialized to zero:
     \begin{align}
         \mathcal{Z}(\mathbf{c};\, \Theta_{z1}) = \mathbf{0} \quad \text{at initialization},
         \label{eq:zero_init}
     \end{align}
-    and thus $\mathbf{x} + \mathbf{0} = \mathbf{x}$. The conditioning signal does not disturb the pretrained model at the start of training.
+    and therefore $\mathbf{x} + \mathbf{0} = \mathbf{x}$. The conditioning signal does not perturb the pretrained activations at the start of training.
 
-    \item \textbf{Trainable copy processing} --- $\mathcal{F}(\mathbf{x} + \mathcal{Z}(\mathbf{c});\, \Theta_c)$: This branch learns to transform the conditioning features into spatially meaningful information. Since $\Theta_c$ is initialized from $\Theta$, the trainable copy starts with the same representational capacity as the pretrained model.
+    \item \textbf{Trainable copy processing} --- $\mathcal{F}(\mathbf{x} + \mathcal{Z}(\mathbf{c});\, \Theta_c)$: The trainable branch learns to map conditioning features into spatially meaningful representations. Since $\Theta_c$ is initialised from $\Theta$, this branch starts with the same representational capacity as the frozen model.
 
-    \item \textbf{Zero-initialized residual injection} --- $\mathcal{Z}(\cdot;\, \Theta_{z0})$: A second zero-initialized convolution ensures that the output of the trainable copy contributes nothing at initialization:
+    \item \textbf{Zero-initialized residual injection} --- $\mathcal{Z}(\cdot;\, \Theta_{z0})$: A second zero-initialized convolution ensures that the trainable branch contributes nothing at initialization:
     \begin{align}
         \mathbf{y}_c = \mathcal{F}(\mathbf{x};\, \Theta) + \mathbf{0} = \mathcal{F}(\mathbf{x};\, \Theta) \quad \text{at initialization}.
         \label{eq:controlnet_init}
     \end{align}
 \end{enumerate}
 
-As training progresses, the parameters $\Theta_c$ learn meaningful control features, while $\Theta_{z0}$ and $\Theta_{z1}$ gradually allow these features to influence generation. This ensures that training \emph{starts from the pretrained solution} and the control signal is incorporated without destroying the learned prior.
+As training progresses, $\Theta_c$ learns meaningful conditioning features, while $\Theta_{z0}$ and $\Theta_{z1}$ gradually allow these features to influence generation. This ensures that training starts from the pretrained solution and the conditioning signal is incorporated smoothly without destroying the learned image prior.
 
-\paragraph{Importance of Zero-Convolution.}
+\paragraph{Multi-Scale Feature Alignment.}
+The Stable Diffusion UNet processes latent features at progressively coarser spatial scales through its encoder hierarchy. The ControlNet branch mirrors this hierarchy exactly, producing residual tensors with identical spatial dimensions and channel counts at each stage, enabling direct element-wise addition as in Equation~\eqref{eq:controlnet_injection}. Table~\ref{tab:controlnet_feature_shapes} summarises the feature shapes across encoder levels for Stable Diffusion v1.x.
+
+\begin{table}[h]
+\centering
+\caption{Feature tensor shapes at each stage of the Stable Diffusion UNet and the corresponding ControlNet residuals. $B$ denotes batch size; $H, W$ denote the spatial dimensions of the input latent.}
+\label{tab:controlnet_feature_shapes}
+\begin{tabular}{lc}
+\toprule
+\textbf{Stage} & \textbf{Feature shape} \\
+\midrule
+Input latent         & $[B,\; C,\; H,\; W]$ \\
+Encoder level 0      & $[B,\; 320,\; H,\; W]$ \\
+Encoder level 1      & $[B,\; 640,\; H/2,\; W/2]$ \\
+Encoder level 2      & $[B,\; 1280,\; H/4,\; W/4]$ \\
+Mid block            & $[B,\; 1280,\; H/4,\; W/4]$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+This multi-scale design allows the conditioning signal to simultaneously influence fine spatial structure through high-resolution encoder features and global semantic layout through low-resolution deep features.
+
+\paragraph{Role of the $1 \times 1$ Zero Convolution.}
+Each residual tensor $\mathbf{r}_i$ is produced via a zero-initialized $1 \times 1$ convolution (Equation~\eqref{eq:controlnet_residual}). A $1 \times 1$ convolution performs a linear transformation across the channel dimension independently at each spatial location:
+\begin{align}
+    \mathbf{y}(h, w) = \mathbf{W}\,\mathbf{x}(h, w),
+    \label{eq:pointwise_conv}
+\end{align}
+where $\mathbf{x}(h, w) \in \mathbb{R}^{C_{\mathrm{in}}}$ and $\mathbf{y}(h, w) \in \mathbb{R}^{C_{\mathrm{out}}}$ are feature vectors at pixel location $(h, w)$, and $\mathbf{W} \in \mathbb{R}^{C_{\mathrm{out}} \times C_{\mathrm{in}}}$ is the learnable weight matrix. Critically, this operation mixes channels without incorporating any spatial context, since the kernel spans only a single pixel location. As a result, the spatial structure of the feature map is preserved while the network learns which ControlNet channels should influence the UNet representation and to what degree.
+
+Initializing $\mathbf{W} = \mathbf{0}$ guarantees $\mathbf{r}_i = \mathbf{0}$ at the start of training, so the modified UNet behaves identically to the pretrained model. As training proceeds, the weights gradually learn to inject conditioning information, enabling stable optimization and preventing degradation of the pretrained generative prior.
+
+\paragraph{Residual Conditioning.}
+The residual tensor $\mathbf{r}_i \in \mathbb{R}^{C_i \times H_i \times W_i}$ acts as a spatially varying feature correction applied to the frozen UNet encoder activations (Equation~\eqref{eq:controlnet_injection}). Because the residual preserves the full spatial resolution of the feature map, ControlNet can guide image generation in a spatially precise manner while leaving the pretrained backbone largely unchanged. This residual formulation decouples the conditioning mechanism from the generative prior: the frozen UNet retains its learned image distribution, while the trainable branch adds structured, signal-specific corrections at each scale.
+
 Without zero-initialization, the model output would change immediately upon adding the ControlNet branch, degrading pretrained generative quality from the first training step. Zero-convolutions guarantee that:
 \begin{itemize}
     \item The pretrained model is perfectly preserved at initialization,
     \item The conditioning influence grows smoothly during training,
     \item Training is stable and data-efficient, even with small control datasets.
 \end{itemize}
-This design made ControlNet remarkably robust in practice and contributed to its widespread adoption.
+This design made ControlNet remarkably robust in practice and contributed to its widespread adoption across a broad range of conditioning modalities.
 
 \paragraph{Supported Control Modalities.}
-ControlNet supports a wide range of spatial conditioning signals, including Canny edges, depth maps, human pose skeletons, segmentation masks, and scribbles. In practice, it transformed diffusion models from purely artistic generators into \emph{controllable image synthesis systems}, where the user can specify precise spatial structure while the diffusion model fills in realistic appearance and detail.
+ControlNet supports a wide range of spatial conditioning signals, including Canny edges, depth maps, human pose skeletons, segmentation masks, and scribbles. In practice, it transformed diffusion models from purely stochastic generators into \emph{controllable image synthesis systems}, where the user can specify precise spatial structure while the diffusion model fills in realistic appearance and texture.
 
-\paragraph{Extension to Video.}
-Originally designed for image diffusion, ControlNet has been adapted to video diffusion models~\cite{hu2023videocontrolnet, chen2023controlavideo}. In the video setting:
-\begin{itemize}
-    \item Conditioning is applied independently per frame,
-    \item The resulting control features are injected into a spatio-temporal UNet,
-    \item Temporal attention layers maintain motion consistency across frames.
-\end{itemize}
-This extension enables spatial control that is coherent across time, which is essential for applications such as driving video generation.
+\paragraph{Extension to Video Diffusion.}
+Although ControlNet was originally designed for image diffusion, the architecture extends naturally to video generation. In video diffusion models, the conditioning signal is processed independently for each frame, producing control feature tensors of shape $[B \cdot T,\; C,\; H,\; W]$, where $T$ denotes the number of frames. These per-frame tensors are subsequently reshaped and injected into a spatio-temporal UNet that operates on features of shape $[B,\; C,\; T,\; H,\; W]$. Temporal attention layers within the UNet maintain motion consistency across frames, while ControlNet residuals enforce spatial structure at each individual timestep. This extension enables spatially controlled yet temporally coherent video generation~\cite{hu2023videocontrolnet, chen2023controlavideo}, which is particularly important for applications such as autonomous driving scene synthesis---the setting addressed in this thesis.
 
 \begin{figure}[t]
     \centering
     \includegraphics[width=0.9\textwidth]{images/controlnet_architecture.png}
-    \caption{ControlNet architecture. A trainable copy of the UNet encoder receives the conditioning input and injects its features into the frozen UNet decoder via zero-initialized convolution layers. At initialization, the zero-convolutions ensure the model output is identical to the pretrained model.}
+    \caption{ControlNet architecture. A trainable copy of the UNet encoder receives the conditioning input and injects multi-scale feature residuals into the frozen UNet via zero-initialized $1 \times 1$ convolution layers. At initialization, all zero-convolutions output zero, ensuring the model behaves identically to the pretrained backbone. As training proceeds, the residuals gradually introduce spatially precise conditioning information.}
     \label{fig:controlnet_architecture}
 \end{figure}
 
