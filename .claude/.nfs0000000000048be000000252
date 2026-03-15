@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(grep -n \"40.01\\\\|10{,}200\\\\|4{,}250\\\\|170 validation\" /misc/usrhomes/s1492/iss_rp_paper/iss_rp_paper/iss-thesis/chapters/ch4_experiments.tex | head -10)",
-      "Bash(grep -n \"35\\\\.74\\\\|392\\\\.10\\\\|0\\\\.407\\\\|SSIM of 0\\\\.346\\\\|verbatim\\\\|14{,}200\\\\|42\\\\.93\\\\|preliminary set of 10\" /misc/usrhomes/s1492/iss_rp_paper/iss_rp_paper/iss-thesis/chapters/ch4_experiments.tex /misc/usrhomes/s1492/iss_rp_paper/iss_rp_paper/iss-thesis/chapters/ch5_discussion.tex 2>/dev/null)"
-    ]
-  }
-}
