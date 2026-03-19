@@ -382,7 +382,7 @@ Stage~2 consists of two parallel processing branches that share the same time em
 \begin{enumerate}
     \item \textbf{Frozen SVD Backbone} ($\theta$): The pretrained SVD UNet, kept entirely frozen. It receives the noisy RGB video latents concatenated with the initial frame conditioning and produces the denoised video prediction. The backbone preserves the high-quality video generation prior learned from large-scale data.
 
-    \item \textbf{Trainable ControlNet} ($\xi$): A copy of the SVD encoder and mid-block, initialized from the pretrained UNet weights. It receives the same 8-channel input as the backbone \emph{plus} the semantic latents as an additional control signal, and produces residual features that are injected into the frozen UNet decoder via zero-initialized convolution layers (see Section~\ref{subsec:controlnet}).
+    \item \textbf{Trainable ControlNet} ($\xi$): A copy of the SVD encoder and mid-block, initialized from the pretrained UNet weights. It receives the same 8-channel input as the backbone \emph{plus} the semantic latents as an additional control signal, and produces residual features that are injected into the frozen UNet decoder via zero-initialized convolution layers (see Section~\\ref{subsec:conditioning_mechanisms}).
 \end{enumerate}
 
 \paragraph{Input Formation.}
@@ -468,7 +468,7 @@ Freezing the SVD UNet during Stage~2 training serves multiple purposes:
     \item \textbf{Preserves the pretrained video prior:} The backbone retains its learned knowledge of natural video dynamics, appearance, and temporal coherence.
     \item \textbf{Prevents catastrophic forgetting:} Training only the ControlNet prevents degradation of the pretrained generation quality.
     \item \textbf{Parameter efficiency:} Only the ControlNet parameters are updated, reducing GPU memory requirements and accelerating convergence.
-    \item \textbf{Stable conditioning learning:} The ControlNet learns to \emph{steer} the frozen backbone rather than retrain it, inheriting the stability guarantees of the zero-initialized architecture (Section~\ref{subsec:controlnet}).
+    \item \textbf{Stable conditioning learning:} The ControlNet learns to \emph{steer} the frozen backbone rather than retrain it, inheriting the stability guarantees of the zero-initialized architecture (Section~\\ref{subsec:conditioning_mechanisms}).
 \end{itemize}
 
 \paragraph{Full Inference Pipeline.}

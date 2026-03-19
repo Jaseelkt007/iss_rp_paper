@@ -460,12 +460,25 @@ SVD operates in image-to-video (I2V) mode: given a single input image, it genera
 \section{Controllable Video Generation}
 \label{sec:controllable}
 
-While diffusion models achieve impressive generative quality, they are inherently stochastic and primarily guided by weak conditioning signals such as text prompts. For applications such as autonomous driving video synthesis, robotics, or simulation, this is insufficient. In these domains, one requires \emph{explicit spatial and structural control}---enforcing object locations, trajectories, or scene layouts with precision.
+While diffusion models achieve impressive generative quality, they are inherently stochastic and primarily guided by weak conditioning signals such as text prompts. For applications such as autonomous driving video synthesis, robotics, or simulation, this is insufficient: these domains require \emph{explicit spatial and structural control}---enforcing object locations, trajectories, or scene layouts with precision. This section surveys the main mechanisms by which control is injected into diffusion models, the types of conditioning signals that can serve as control, the most closely related prior method for driving video generation, and the broader landscape of driving-specific generative models, before positioning the contribution of this thesis.
 
-Controllable diffusion models address this limitation by augmenting pretrained diffusion backbones with mechanisms that inject structured conditioning signals while preserving generative quality. This section reviews the key architectures that enable such control.
+% -----------------------------------------------------------------
+\subsection{Conditioning Mechanisms for Diffusion and Video Diffusion}
+\label{subsec:conditioning_mechanisms}
 
-\subsection{ControlNet}
-\label{subsec:controlnet}
+A conditioning \emph{mechanism} describes how external information is architecturally incorporated into a diffusion model. Several mechanisms exist, ranging from training-time score blending to structural architectural extensions. They differ in the spatial precision they provide, the number of trainable parameters they introduce, and the degree to which they modify the pretrained generative prior.
+
+\paragraph{Classifier-Free Guidance.}
+Classifier-free guidance (CFG), discussed in Section~\ref{subsec:cfg}, is the most fundamental conditioning mechanism. A single network is jointly trained on conditional and unconditional inputs by randomly masking the conditioning signal during training. At inference, the conditional and unconditional score estimates are linearly combined (Equation~\ref{eq:cfg}) to amplify adherence to the conditioning variable. CFG operates at the level of the score function and does not impose any spatial structure on the generated output; it biases generation globally toward the conditioning modality without constraining specific pixel locations.
+
+\paragraph{Feature Injection via Concatenation and Cross-Attention.}
+More structured conditioning is achieved by injecting external features directly into the denoising network. Concatenation appends the conditioning tensor to the noisy input along the channel dimension, allowing the network to access the conditioning signal at every denoising step. Cross-attention, used in text-conditioned latent diffusion models~\cite{rombach2022highresolution}, maps conditioning tokens to keys and values that interact with every spatial position in the feature map via attention weights (Equation~\ref{eq:cross_attention}). Cross-attention enables flexible global conditioning but does not enforce local spatial alignment between the conditioning signal and the generated output.
+
+\paragraph{Side-Branch Adapters.}
+A family of lightweight adapter methods attaches small auxiliary modules to a frozen diffusion backbone to inject additional conditioning signals with minimal parameter overhead. T2I-Adapter~\cite{mou2024t2i} learns a lightweight convolutional encoder that extracts multi-scale features from structural conditions---such as Canny edges, depth maps, or sketch lines---and adds them to the frozen UNet encoder at corresponding spatial scales. This approach achieves conditioning fidelity comparable to full fine-tuning while training only the small adapter module, preserving the pretrained generative prior and remaining agnostic to the specific backbone version.
+
+\paragraph{ControlNet.}
+ControlNet~\cite{zhang2023adding} provides spatially precise, multi-scale conditioning by introducing a parallel trainable encoder branch that mirrors the frozen UNet encoder. It goes beyond lightweight adapters by learning a full copy of the encoder weights, enabling strong spatial correspondence between the conditioning signal and the generated output. The following paragraphs describe its architecture, training procedure, and properties in detail, as ControlNet forms the direct conditioning backbone used in both stages of the pipeline presented in this thesis.
 
 \paragraph{Motivation.}
 Pretrained diffusion models such as Stable Diffusion learn powerful image priors from large-scale datasets. However, incorporating additional conditioning signals---such as edge maps, depth maps, or semantic segmentation masks---typically requires fine-tuning the entire UNet. This approach can lead to several fundamental issues:
@@ -580,11 +593,8 @@ Without zero-initialization, the model output would change immediately upon addi
 \end{itemize}
 This design made ControlNet remarkably robust in practice and contributed to its widespread adoption across a broad range of conditioning modalities.
 
-\paragraph{Supported Control Modalities.}
-ControlNet supports a wide range of spatial conditioning signals, including Canny edges, depth maps, human pose skeletons, segmentation masks, and scribbles. In practice, it transformed diffusion models from purely stochastic generators into \emph{controllable image synthesis systems}, where the user can specify precise spatial structure while the diffusion model fills in realistic appearance and texture.
-
 \paragraph{Extension to Video Diffusion.}
-Although ControlNet was originally designed for image diffusion, the architecture extends naturally to video generation. In video diffusion models, the conditioning signal is processed independently for each frame, producing control feature tensors of shape $[B \cdot T,\; C,\; H,\; W]$, where $T$ denotes the number of frames. These per-frame tensors are subsequently reshaped and injected into a spatio-temporal UNet that operates on features of shape $[B,\; C,\; T,\; H,\; W]$. Temporal attention layers within the UNet maintain motion consistency across frames, while ControlNet residuals enforce spatial structure at each individual timestep. This extension enables spatially controlled yet temporally coherent video generation~\cite{hu2023videocontrolnet, chen2023controlavideo}, which is particularly important for applications such as autonomous driving scene synthesis---the setting addressed in this thesis.
+Although ControlNet was originally designed for image diffusion, the architecture extends naturally to video generation. In video diffusion models, the conditioning signal is processed independently for each frame, producing control feature tensors of shape $[B \cdot T,\; C,\; H,\; W]$, where $T$ denotes the number of frames. These per-frame tensors are subsequently reshaped and injected into a spatio-temporal UNet that operates on features of shape $[B,\; C,\; T,\; H,\; W]$. Temporal attention layers within the UNet maintain motion consistency across frames, while ControlNet residuals enforce spatial structure at each individual timestep. This extension enables spatially controlled yet temporally coherent video generation~\cite{hu2023videocontrolnet, chen2023controlavideo}, which is the setting addressed in this thesis.
 
 \begin{figure}[t]
     \centering
@@ -593,32 +603,54 @@ Although ControlNet was originally designed for image diffusion, the architectur
     \label{fig:controlnet_architecture}
 \end{figure}
 
-\subsection{Bounding-Box Control: Ctrl-V}
+\FloatBarrier
+
+% -----------------------------------------------------------------
+\subsection{Control Modalities for Video Generation}
+\label{subsec:control_modalities}
+
+A conditioning mechanism describes \emph{how} external information is injected into the generation process; the conditioning \emph{modality} describes \emph{what} type of information is provided. These two aspects are largely independent: the same mechanism, such as ControlNet, can process different modalities, such as depth maps, segmentation maps, or bounding boxes. This subsection surveys the main modalities used for controllable video generation, organised along the spectrum from sparse to dense control.
+
+\paragraph{Dense Geometric Controls.}
+Edges, depth maps, and human pose skeletons provide per-pixel or per-joint geometric constraints. VideoControlNet~\cite{hu2023videocontrolnet} uses per-frame depth and Canny edge maps as frame-level conditions injected through a ControlNet branch into a video diffusion model. ControlVideo~\cite{chen2023controlavideo} extends this approach to generate temporally consistent video sequences from text prompts guided by edge or depth maps. These modalities are \emph{dense} in that they specify a value at every spatial location; however, they encode geometric structure rather than semantic class membership, leaving the identity and category of scene elements implicit.
+
+\paragraph{Sparse Layout and Bounding Box Controls.}
+Bounding boxes specify object identity and spatial extent in a compact, interpretable format. Each box encodes the category and location of an object without constraining its appearance, texture, or the regions outside its boundaries. Boximator~\cite{wang2024boximator} combines textual prompts with hard and soft bounding box constraints to achieve fine-grained object motion control in video generation. Bounding boxes are a \emph{sparse} conditioning modality: they leave large portions of the scene layout unconstrained, relying on the generative model to fill in texture and appearance details within and around the specified regions.
+
+\paragraph{Semantic Segmentation Maps.}
+Semantic segmentation maps assign a class label to every pixel, providing dense and semantically meaningful spatial conditioning. SPADE~\cite{park2019semantic} introduced spatially adaptive denormalization for image synthesis conditioned on semantic layouts, demonstrating high-quality scene generation from complete per-pixel annotations. Unlike bounding boxes, segmentation maps specify the semantic category of every pixel, simultaneously constraining object boundaries, background regions, and overall scene-level layout. This makes segmentation-based conditioning particularly expressive for autonomous driving scenes, where road surfaces, buildings, vegetation, and dynamic objects occupy distinct and annotated spatial regions.
+
+\paragraph{Motion Priors: Trajectories and Optical Flow.}
+Temporal dynamics can be controlled through explicit motion signals such as camera trajectories, point tracks, or dense optical flow fields. AnimateDiff~\cite{guo2024animatediff} introduces learnable motion layers conditioned on motion trajectories, enabling control over the direction and magnitude of motion across frames. ReVideo~\cite{mou2024revideo} provides a framework for video content editing through joint motion and appearance control. Optical flow offers a dense, frame-to-frame correspondence field that specifies the displacement of every pixel, providing fine-grained temporal control at the cost of requiring accurate flow estimation from the input sequence.
+
+\paragraph{Sparse Versus Dense Control.}
+The modalities described above occupy a spectrum from sparse to dense spatial specification. Sparse modalities---such as bounding boxes or text prompts---constrain a limited subset of spatial locations or semantic attributes, leaving the remaining appearance to the generative model. Dense modalities---such as segmentation maps or optical flow fields---specify a value for every spatial location, providing complete scene-level specification at the cost of requiring accurate per-pixel annotations. The trade-off is between control granularity and annotation effort: dense control enables precise scene specification but demands detailed labelling, whereas sparse control is more flexible and easier to obtain but provides less precise guidance. This distinction directly motivates the choice of dense semantic segmentation maps as the conditioning modality in this thesis.
+
+\FloatBarrier
+
+% -----------------------------------------------------------------
+\subsection{Bounding-Box-Based Video Generation for Autonomous Driving: Ctrl-V}
 \label{subsec:ctrlv}
 
+Ctrl-V~\cite{luo2025ctrlv} is a controllable video generation framework for autonomous driving that instantiates the ControlNet conditioning mechanism (Section~\ref{subsec:conditioning_mechanisms}) with bounding box trajectories as the conditioning modality (Section~\ref{subsec:control_modalities}). It is built on the SVD backbone and uses a two-stage pipeline to bridge sparse control inputs and temporally coherent video output.
+
 \paragraph{Motivation.}
-In autonomous driving simulation, control via generic edges or depth maps is insufficient. Instead, the application demands:
+In autonomous driving simulation, control via generic edges or depth maps is insufficient for specifying the precise motion and identity of surrounding vehicles and road users. The application instead demands:
 \begin{itemize}
     \item Explicit object identities and categories,
-    \item Bounding box trajectories specifying object motion,
-    \item Temporal consistency across the generated video,
+    \item Bounding box trajectories specifying object motion over time,
+    \item Temporal consistency across the generated video clip,
     \item Physical plausibility of object dynamics.
 \end{itemize}
-Ctrl-V~\cite{luo2025ctrlv} addresses these requirements by conditioning Stable Video Diffusion (SVD) on bounding box trajectories through a two-stage framework.
+Ctrl-V addresses these requirements by conditioning SVD on bounding box trajectories through a two-stage diffusion framework.
 
 \paragraph{Stage~1 --- Bounding Box Generator.}
-The first stage predicts bounding box trajectories using a diffusion model built on the SVD backbone. Given:
-\begin{itemize}
-    \item An initial RGB frame $\mathbf{f}^{(0)}$,
-    \item An initial bounding box frame $\mathbf{b}^{(0)}$,
-    \item Optionally, a final bounding box frame $\mathbf{b}^{(N-1)}$,
-\end{itemize}
-the model generates the full bounding box video sequence:
+The first stage predicts bounding box trajectories using a diffusion model built on the SVD backbone. Given an initial RGB frame $\mathbf{f}^{(0)}$, an initial bounding box frame $\mathbf{b}^{(0)}$, and optionally a final bounding box frame $\mathbf{b}^{(N-1)}$, the model generates the full bounding box video sequence:
 \begin{align}
     \mathbf{b} = \left[\mathbf{b}^{(0)},\, \mathbf{b}^{(1)},\, \ldots,\, \mathbf{b}^{(N-1)}\right]
     \label{eq:bbox_sequence}
 \end{align}
-through the diffusion process in latent space. This stage converts sparse control inputs into a complete temporal trajectory, providing dense frame-by-frame conditioning for the subsequent video generation stage.
+through the diffusion process in latent space. This stage converts sparse control inputs into a complete temporal trajectory, providing dense frame-by-frame bounding box conditioning for the subsequent video generation stage.
 
 \paragraph{Stage~2 --- Box2Video Generation.}
 The predicted bounding box sequence is encoded via the VAE and injected into SVD through a ControlNet module. The noise prediction combines the frozen SVD backbone with the trainable ControlNet:
@@ -626,49 +658,31 @@ The predicted bounding box sequence is encoded via the VAE and injected into SVD
     \boldsymbol{\epsilon}_\theta(\hat{\mathbf{z}}_t, t, \mathbf{z}^{(0)}, \mathbf{c}^{(0)}, \mathbf{b}) = \mathbb{U}_\theta\!\left(\hat{\mathbf{z}}_t, t, \mathbf{z}^{(0)}_{\text{pad}}, \mathbf{c}^{(0)}\right) + \text{ControlNet}_\xi(\hat{\mathbf{z}}_t, \mathbf{b}),
     \label{eq:ctrlv_box2video}
 \end{align}
-where:
-\begin{itemize}
-    \item $\mathbb{U}_\theta$ is the frozen SVD UNet backbone,
-    \item $\hat{\mathbf{z}}_t$ is the noisy video latent at diffusion step $t$,
-    \item $\mathbf{z}^{(0)}_{\text{pad}}$ is the initial frame latent padded along the temporal dimension,
-    \item $\mathbf{c}^{(0)}$ is the CLIP embedding of the initial frame,
-    \item $\mathbf{b}$ is the VAE-encoded bounding box sequence,
-    \item $\xi$ denotes the trainable ControlNet parameters.
-\end{itemize}
+where $\mathbb{U}_\theta$ is the frozen SVD UNet backbone, $\hat{\mathbf{z}}_t$ is the noisy video latent at diffusion step $t$, $\mathbf{z}^{(0)}_{\text{pad}}$ is the initial frame latent padded along the temporal dimension, $\mathbf{c}^{(0)}$ is the CLIP embedding of the initial frame, $\mathbf{b}$ is the VAE-encoded bounding box sequence, and $\xi$ denotes the trainable ControlNet parameters. The key design property is that $\theta$ \emph{remains frozen} while only $\xi$ \emph{is trained}. This preserves the pretrained video generation prior intact; only the control branch adapts to the bounding box conditioning.
 
-The key design property is that $\theta$ \emph{remains frozen} while only $\xi$ \emph{is trained}. This preserves the pretrained video generation prior intact; only the control branch adapts to the bounding box conditioning. The bounding box trajectories guide object motion while the frozen SVD backbone ensures high visual quality and temporal coherence.
+\paragraph{Characteristics of Bounding Box Control.}
+Bounding box conditioning provides explicit object-level control in a compact, interpretable format that is directly compatible with detection annotation datasets commonly used in autonomous driving. However, bounding boxes specify only the spatial extent of individual objects and leave the background layout, road surface, and inter-object spatial relationships unconstrained. Scene-level structure must therefore be inferred by the generative model rather than explicitly specified. This constraint---and the gap it opens---motivates the substitution of bounding box conditioning with dense semantic segmentation maps in the present work.
 
-\paragraph{Advantages of Bounding Box Control.}
-Compared to pixel-level conditioning (e.g., dense segmentation maps), bounding boxes provide:
-\begin{itemize}
-    \item Explicit object-level control with interpretable structure,
-    \item Compact representation that scales to long sequences,
-    \item Direct compatibility with object detection datasets commonly used in autonomous driving.
-\end{itemize}
-This makes Ctrl-V particularly suitable for driving simulation, where object trajectories are a natural and available form of supervision.
+\FloatBarrier
 
-\subsection{Other Control Modalities}
-\label{subsec:other_controls}
-
-Beyond bounding boxes, various spatial and motion control strategies have been explored for video generation:
-\begin{itemize}
-    \item \textbf{Depth and Edge Maps:} VideoControlNet~\cite{hu2023videocontrolnet} uses per-frame depth, Canny edges, and optical flow as frame-level conditions for video diffusion.
-    \item \textbf{Motion Modules:} AnimateDiff~\cite{guo2024animatediff} introduces learnable motion layers that can be conditioned on motion trajectories, enabling temporal dynamics control.
-    \item \textbf{Text and Layout:} Boximator~\cite{wang2024boximator} combines textual prompts with hard and soft bounding box constraints for fine-grained motion control.
-    \item \textbf{Semantic Layouts:} SPADE-based approaches~\cite{park2019semantic} condition image synthesis on semantic segmentation maps, but their extension to video generation within diffusion frameworks remains underexplored---a gap that this thesis aims to fill.
-\end{itemize}
-
-\subsection{Driving-Specific Video Generation}
+% -----------------------------------------------------------------
+\subsection{Driving-Specific Video Generation and World Models}
 \label{subsec:driving_generation}
 
-Several recent works target video generation for autonomous driving specifically:
-\begin{itemize}
-    \item \textbf{GAIA-1}~\cite{hu2023gaia}: A generative world model that produces driving videos from text, action, and video tokens.
-    \item \textbf{DrivingDiffusion}~\cite{li2023drivingdiffusion}: Uses layout-guided multi-view generation with latent diffusion.
-    \item \textbf{VISTA}~\cite{gao2024vista}: A generalizable driving world model with high fidelity and versatile controllability.
-\end{itemize}
+A distinct line of research targets video generation specifically for autonomous driving, motivated by the demand for scalable and controllable simulation data. These methods range from weakly controlled generative models to structured world models with explicit scene representations.
 
-These works highlight the growing interest in using generative models for autonomous driving simulation. The approach in this thesis differs by using \emph{dense semantic segmentation maps} as the control signal, providing pixel-level scene specification rather than sparse bounding boxes or text descriptions.
+GAIA-1~\cite{hu2023gaia} is a generative world model that produces driving videos by conditioning on text descriptions, ego-vehicle actions, and video tokens. It demonstrates that large-scale autoregressive models can synthesize temporally coherent driving scenarios, but provides limited pixel-level spatial control: scene layout is not explicitly specified and emerges implicitly from high-level conditioning inputs. DrivingDiffusion~\cite{li2023drivingdiffusion} uses layout-guided multi-view generation with latent diffusion to synthesize surrounding-view video from structured layout annotations, offering stronger spatial grounding than text-based approaches. VISTA~\cite{gao2024vista} is a generalizable driving world model that combines high visual fidelity with versatile controllability through a broad range of conditioning modalities. UniSim~\cite{yang2024generalized} frames autonomous driving simulation as a generative prediction problem and produces sensor-realistic rollouts conditioned on agent states and actions.
 
-\paragraph{Summary.}
-ControlNet introduced a principled mechanism for injecting structured spatial control into pretrained diffusion models without degrading generative quality. Ctrl-V extends this idea to video generation with bounding box trajectories, enabling object-level control and temporal consistency for autonomous driving simulation. These architectures form the foundation for controllable video synthesis and directly motivate the semantic control mechanisms proposed in this thesis.
+These works collectively demonstrate the feasibility of generative driving simulation but differ from the approach taken in this thesis in an important respect. Their conditioning signals are either high-level (text, actions, tokens) or sparse and object-centric (bounding boxes, layout annotations), and none of them employs dense semantic segmentation maps as a pixel-level conditioning signal operating through a modular ControlNet-style mechanism. This is precisely the gap addressed in the present work.
+
+\FloatBarrier
+
+% -----------------------------------------------------------------
+\subsection{Position of This Thesis}
+\label{subsec:thesis_position}
+
+The preceding subsections establish the conceptual landscape from which the present work departs. ControlNet provides a principled mechanism for injecting spatial control into pretrained diffusion models while preserving their generative prior (Section~\ref{subsec:conditioning_mechanisms}). Semantic segmentation maps offer dense, semantically meaningful conditioning that fully specifies scene layout at the pixel level (Section~\ref{subsec:control_modalities}). Ctrl-V demonstrates the viability of structured controllable video generation for autonomous driving using a two-stage SVD-based pipeline with bounding box conditioning (Section~\ref{subsec:ctrlv}). Driving-specific world models confirm the demand for controllable simulation but rely on sparse or implicit scene representations (Section~\ref{subsec:driving_generation}).
+
+The present thesis builds on this foundation by replacing bounding box conditioning with dense semantic segmentation maps as the primary control signal within a two-stage SVD-based pipeline. This substitution is non-trivial: segmentation maps are discrete, per-pixel annotation structures that cannot be encoded by the standard RGB VAE, which was designed for continuous natural images. Addressing this requires a purpose-built Semantic VAE that maps integer class labels into a continuous latent representation compatible with the diffusion backbone, as described in Section~\ref{subsec:semantic_vae}. The resulting framework retains the temporal coherence and generative quality of SVD, preserves the structured controllability of Ctrl-V, and extends scene-level specificity from sparse object trajectories to dense pixel-level semantic layout.
+
+The primary distinction from prior work lies in the conditioning modality and its implications for scene representation. Sparse bounding box conditioning constrains object locations but not background structure; dense semantic conditioning constrains every pixel, providing complete scene-level specification at every frame. This combination of properties---dense semantic control, video-level temporal consistency, and compatibility with standard driving annotation formats---has not been jointly addressed in prior work and constitutes the primary contribution of this thesis. Chapter~\ref{ch:methodology} describes the proposed methodology in detail.
