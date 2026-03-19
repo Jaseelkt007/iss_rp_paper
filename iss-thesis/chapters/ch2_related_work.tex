@@ -62,7 +62,10 @@ Instead of specifying $\mathbf{v}$ directly, it is often more convenient to firs
     p_t(\mathbf{x}) = \int p_t(\mathbf{x} \mid \mathbf{x}_1)\, p_{\text{data}}(\mathbf{x}_1)\, d\mathbf{x}_1,
     \label{eq:marginal_path}
 \end{align}
-where $\mathbf{x}_1 \sim p_{\text{data}}$ is a clean data sample and $p_t(\mathbf{x} \mid \mathbf{x}_1)$ is a designed interpolation between noise and data. A common choice is a \emph{Gaussian conditional path}:
+where $\mathbf{x}_1 \sim p_{\text{data}}$ is a clean data sample and $p_t(\mathbf{x} \mid \mathbf{x}_1)$ is a designed interpolation between noise and data. The conditional probability path is not unique: different choices of $p_t(\mathbf{x} \mid \mathbf{x}_1)$ define different generative frameworks and training objectives. Modern approaches differ primarily in how this path is constructed.
+
+\paragraph{Gaussian perturbation path.}
+A widely used choice is the Gaussian perturbation path, which corresponds to variance-preserving stochastic diffusion:
 \begin{align}
     \mathbf{x}_t = \alpha(t)\,\mathbf{x}_1 + \sigma(t)\,\boldsymbol{\epsilon}, \qquad \boldsymbol{\epsilon} \sim \mathcal{N}(\mathbf{0}, \mathbf{I}),
     \label{eq:gaussian_interpolant}
@@ -73,7 +76,17 @@ where $\alpha(t)$ and $\sigma(t)$ are smooth scalar functions satisfying the bou
     \alpha(1) = 1,\quad \sigma(1) = 0 \qquad \text{(clean data at } t=1\text{)}.
     \label{eq:path_conditions}
 \end{align}
-This construction explicitly defines how data points are gradually corrupted into noise (or equivalently, how noise is gradually shaped into data). Different choices of $\alpha(t)$ and $\sigma(t)$ recover different generative frameworks, as discussed in Section~\ref{subsec:unified_view}.
+This path corresponds to the stochastic SDE formulation (Section~\ref{subsec:sde}) and leads naturally to score matching as the training objective. It underlies DDPM~\cite{ho2020denoising}, score-based models~\cite{song2021scorebased}, and Stable Diffusion~\cite{rombach2022highresolution}.
+
+\paragraph{Linear interpolation path.}
+An alternative construction, adopted by flow matching and rectified flow methods, uses a deterministic linear interpolation between noise and data:
+\begin{align}
+    \mathbf{x}_t = (1 - t)\,\boldsymbol{\epsilon} + t\,\mathbf{x}_1, \qquad \boldsymbol{\epsilon} \sim \mathcal{N}(\mathbf{0}, \mathbf{I}).
+    \label{eq:linear_interpolant}
+\end{align}
+This path eliminates stochasticity from the forward process and instead defines a deterministic transport between the noise and data distributions. The corresponding conditional vector field simplifies to the constant $\mathbf{v}^* = \mathbf{x}_1 - \boldsymbol{\epsilon}$, yielding straight-line trajectories in data space. Unlike Gaussian diffusion paths, linear interpolation paths rely on learning deterministic transport dynamics, which has been shown to improve sampling efficiency and trajectory straightness in recent models~\cite{liu2023flow, lipman2023flow}. This formulation is used in Rectified Flow~\cite{liu2023flow}, Flow Matching~\cite{lipman2023flow}, and Stable Video Diffusion (SVD)~\cite{blattmann2023stable}.
+
+Different choices of path construction recover specific generative frameworks, as discussed in Section~\ref{subsec:unified_view}.
 
 \subsection{Conditional and Marginal Vector Fields}
 \label{subsec:vector_fields}
@@ -189,7 +202,11 @@ The connection between flow matching and diffusion is made precise by noting tha
     \mathbf{v}^*(\mathbf{x}_t, t) = \mathbf{f}(\mathbf{x}_t, t) - \frac{1}{2}\,g(t)^2\,\nabla_{\mathbf{x}} \log p_t(\mathbf{x}_t),
     \label{eq:flow_score_relation}
 \end{align}
-which is exactly the probability flow ODE~\eqref{eq:prob_flow_ode}. This perspective provides a coherent mathematical foundation for modern generative modeling and naturally extends to conditional and controllable generation settings, as exploited throughout this thesis.
+which is exactly the probability flow ODE~\eqref{eq:prob_flow_ode}. The distinction between diffusion models and flow matching methods can therefore be interpreted as a choice of probability path and training target: diffusion models learn score functions under Gaussian perturbations, whereas flow matching learns velocity fields under arbitrary probability paths. This perspective reveals that diffusion is a special case of a broader class of transport-based generative models~\cite{albergo2023stochastic}, unified by the design of the conditional probability path.
+
+For Gaussian probability paths, the conditional vector field and the score function are analytically related. In particular, predicting noise $\boldsymbol{\epsilon}$, score $\nabla_{\mathbf{x}} \log p_t(\mathbf{x})$, or velocity $\mathbf{v}(\mathbf{x}, t)$ are equivalent parameterizations of the same underlying objective, differing only by a time-dependent rescaling factor. This equivalence explains why DDPM~\cite{ho2020denoising}, score-based models~\cite{song2021scorebased}, and flow matching~\cite{lipman2023flow} can share similar architectures while employing different training targets.
+
+Sampling strategies also differ systematically across formulations. Diffusion models support both stochastic sampling via the reverse SDE~\eqref{eq:reverse_sde}, which promotes sample diversity, and deterministic sampling via the probability flow ODE~\eqref{eq:prob_flow_ode}. Flow matching and rectified flow methods rely exclusively on ODE integration, eliminating stochasticity entirely and typically requiring fewer function evaluations for comparable quality~\cite{liu2023flow}. Modern large-scale models such as SVD~\cite{blattmann2023stable} adopt deterministic ODE-based samplers and operate in latent space for computational efficiency. Modern generative models therefore differ primarily in their choice of probability path and output parameterization---score versus velocity---rather than in fundamentally different generative principles. This perspective provides a coherent mathematical foundation for modern generative modeling and naturally extends to conditional and controllable generation settings, as exploited throughout this thesis.
 
 \subsection{Denoising Diffusion Probabilistic Models}
 \label{subsec:ddpm}
