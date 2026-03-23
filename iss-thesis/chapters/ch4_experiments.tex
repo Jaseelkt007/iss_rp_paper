@@ -29,7 +29,7 @@ Tables~\ref{tab:vae_config}--\ref{tab:stage2_config} summarize the training hype
         \toprule
         \textbf{Parameter} & \textbf{Value} \\
         \midrule
-        Pretrained VAE & \texttt{stabilityai/stable-video-diffusion-img2vid-xt} \\
+        Pretrained VAE & SVD-XT~\cite{blattmann2023stable} \\
         Input resolution & $192 \times 704$ \\
         Number of classes & 19 (Cityscapes label set) \\
         Clip size & 4 frames \\
@@ -64,7 +64,7 @@ The relatively high learning rate of $10^{-3}$ is justified by the small number 
         \toprule
         \textbf{Parameter} & \textbf{Value} \\
         \midrule
-        Base model & SVD-XT (\texttt{stable-video-diffusion-img2vid-xt}) \\
+        Base model & SVD-XT~\cite{blattmann2023stable} \\
         Input resolution & $192 \times 704$ \\
         Clip length & 25 frames \\
         Latent shape per clip & $25 \times 4 \times 24 \times 88$ \\
@@ -89,7 +89,7 @@ The relatively high learning rate of $10^{-3}$ is justified by the small number 
     \end{tabular}
 \end{table}
 
-The semantic conditioning pathway encodes semantic label maps via the frozen Semantic VAE, replacing the bounding box overlays used in the original Ctrl-V framework~\cite{he2024ctrlv}. The conservative learning rate of $5 \times 10^{-6}$ preserves the temporal priors of the pre-trained SVD-XT backbone while adapting the temporal attention blocks to the semantic domain.
+The semantic conditioning pathway encodes semantic label maps via the frozen Semantic VAE, replacing the bounding box overlays used in the original Ctrl-V framework~\cite{luo2025ctrlv}. The conservative learning rate of $5 \times 10^{-6}$ preserves the temporal priors of the pre-trained SVD-XT backbone while adapting the temporal attention blocks to the semantic domain.
 
 \begin{table}[t]
     \centering
@@ -99,7 +99,7 @@ The semantic conditioning pathway encodes semantic label maps via the frozen Sem
         \toprule
         \textbf{Parameter} & \textbf{Value} \\
         \midrule
-        Base model & SVD-XT (\texttt{stable-video-diffusion-img2vid-xt}) \\
+        Base model & SVD-XT~\cite{blattmann2023stable} \\
         Conditioning architecture & ControlNet (copy of SVD UNet encoder) \\
         Input resolution & $192 \times 704$ \\
         Clip length & 25 frames \\
@@ -159,10 +159,10 @@ The Semantic VAE was developed through iterative refinement across three phases,
 \end{table}
 
 \paragraph{Phase~1: RGB VAE Baseline.}
-Semantic IDs were converted to an RGB color palette, passed through the frozen SVD VAE, and decoded back via nearest-neighbor color matching. The 97.7\% pixel accuracy but only 54.3\% mIoU reveals a critical insight: the pretrained VAE's smooth latent space destroys semantic boundaries, which account for less than 10\% of all pixels but contribute to over 40\% of errors. Large homogeneous regions (road, building, vegetation) are reconstructed accurately, while thin structures and class transitions are severely degraded.
+Semantic IDs were converted to an RGB color palette, passed through the frozen SVD VAE, and decoded back via nearest-neighbor color matching. The contrast between the 97.7\% pixel accuracy and the 54.3\% mIoU exposes a fundamental limitation: the pretrained VAE's smooth latent space destroys semantic boundaries, which account for less than 10\% of all pixels but contribute to over 40\% of errors. Large homogeneous regions (road, building, vegetation) are reconstructed accurately, while thin structures and class transitions are severely degraded.
 
 \paragraph{Phase~2a: Adapter Training.}
-Lightweight adapter modules (a $1 \times 1$ convolution from 19 to 3 channels at the input and 3 to 19 channels at the output, totaling 14K parameters) were trained around the frozen VAE. Without boundary weighting, the model achieved 64.8\% mIoU---actually \emph{lower} than the baseline in pixel accuracy due to training instabilities. Adding boundary-weighted cross-entropy ($\alpha=8.0$) dramatically improved results to 79.5\% mIoU, a 22.7\% absolute improvement. This demonstrated that boundary emphasis is the single most impactful loss design choice.
+Lightweight adapter modules — comprising a $1 \times 1$ convolution from 19 to 3 channels at the encoder input and 3 to 19 channels at the decoder output, totalling 14K trainable parameters — were trained around the frozen VAE. Without boundary weighting, the adapter achieved 64.8\% mIoU, while pixel accuracy fell to 93.8\%, below the Phase~1 baseline of 97.7\%, attributable to instabilities introduced by the narrow 3-channel bottleneck. Introducing boundary-weighted cross-entropy ($\alpha=8.0$) raised mIoU substantially to 79.5\%, an absolute gain of 22.7 percentage points, with pixel accuracy recovering to 99.3\%.
 
 \paragraph{Phase~2b: Semantic-Native Architecture.}
 Removing the 3-channel RGB bottleneck by directly feeding 128-channel semantic features into the VAE core further improved performance to 88.0\% mIoU (with CE loss only). Adding Dice loss ($\lambda_{\text{Dice}}=0.5$) yielded the final best result of \textbf{89.7\% mIoU}. The 35.4\% absolute improvement from baseline to final model validates both architectural and loss function innovations.
