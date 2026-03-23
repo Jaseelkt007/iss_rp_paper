@@ -91,7 +91,7 @@ To obtain stable estimates of the Gaussian statistics, FVD is computed over a su
 \subsection{Semantic Consistency Metrics}
 \label{subsec:miou}
 
-Semantic consistency is a primary evaluation criterion for both stages of the proposed pipeline. However, the two stages differ fundamentally in the type of output they produce. Stage~1 generates semantic segmentation maps directly, enabling exact pixel-level comparison against ground-truth labels. Stage~2 generates RGB video frames, which carry no explicit semantic labels; an external segmentation model must therefore be applied to the generated frames to extract their semantic content before any comparison with ground truth is possible. The following metrics are defined and applied in both evaluation settings.
+Semantic consistency is a primary evaluation criterion for both stages of the proposed pipeline. The following metrics are defined here and applied in the evaluation of both stages; the specific evaluation procedures for Stage~1 and Stage~2 differ in how predictions are obtained and are described in Sections~\ref{subsec:stage1} and~\ref{subsec:stage2} respectively.
 
 \paragraph{Mean Intersection-over-Union (mIoU).}
 The primary metric for quantifying semantic accuracy is mean Intersection-over-Union (mIoU). For each semantic class $c$, the Intersection-over-Union score is computed from a global confusion matrix accumulated over all evaluation frames:
@@ -116,16 +116,6 @@ where $N_c$ denotes the total number of ground-truth pixels assigned to class $c
 
 \paragraph{Additional Pixel-Level Metrics.}
 Alongside mIoU and FW-IoU, overall pixel accuracy and mean class accuracy are reported. Overall pixel accuracy measures the fraction of correctly classified pixels without regard to class imbalance. Mean class accuracy is the macro-average per-class recall, computed as the fraction of ground-truth pixels of each class that are correctly predicted, then averaged uniformly across all classes present in the ground truth.
-
-\paragraph{Stage~1 Evaluation: Direct Semantic Comparison.}
-In Stage~1, the model outputs a sequence of semantic segmentation maps, obtained by decoding the predicted latents through the Semantic VAE and selecting the class with the highest logit at each pixel. The resulting hard predictions are compared directly against the ground-truth trainID maps using the confusion-matrix formulation above. Because the comparison operates in the discrete label space without any intermediate model, the evaluation is exact. During training, mIoU computed on a held-out validation split serves as the model selection criterion: the checkpoint exhibiting the highest validation mIoU is retained, and training is halted early if no absolute improvement of at least $0.2\%$ in mIoU is observed over six consecutive validation events.
-
-\paragraph{Stage~2 Evaluation: DRN-Based Semantic Assessment.}
-Stage~2 outputs RGB video frames rather than semantic maps, so a direct label comparison against ground-truth annotations is not applicable. Instead, a pretrained semantic segmentation network is applied to each generated frame to infer its semantic content, and the resulting predictions are compared against the corresponding ground-truth labels. Specifically, a Dilated Residual Network (DRN)~\cite{yu2017dilated} — using the 105-layer \textit{drn\_d\_105} architecture — pre-trained on the KITTI-360 training sequences is used as the external evaluator. Applying this fixed network to the generated RGB frames and accumulating a confusion matrix against the ground-truth labels yields DRN mIoU, DRN pixel accuracy, DRN mean class accuracy, and DRN FW-IoU for each generated clip.
-
-This approach provides an indirect but principled measure of semantic controllability. If the generated RGB frames faithfully preserve the scene layout specified by the input conditioning maps, a competent segmentation model applied to those frames should recover class predictions that closely match the original ground-truth labels. The DRN mIoU therefore quantifies the extent to which the generation process respects the semantic structure of the conditioning input. It is important to note that DRN mIoU is not a direct measure of photometric generation quality; it reflects semantic consistency as assessed by an external model whose own accuracy on real images forms an implicit performance ceiling.
-
-During Stage~2 training, the early stopping criterion is the Learned Perceptual Image Patch Similarity (LPIPS)~\cite{zhang2018unreasonable} evaluated on held-out validation clips, rather than DRN mIoU. This choice reflects the nature of Stage~2 as an RGB video generation task: LPIPS captures both structural similarity and perceptual appearance quality using deep feature representations and is therefore a more sensitive and stable indicator of model improvement during the RGB generation phase. The checkpoint yielding the lowest validation LPIPS is retained, and training terminates if no absolute reduction of at least $0.005$ in LPIPS is observed over eight consecutive validation events.
 
 \subsection{Additional Video Quality Metrics}
 \label{subsec:additional_metrics}
@@ -384,6 +374,9 @@ Separating semantic prediction from RGB generation provides several advantages:
 \end{itemize}
 This decomposition mirrors the strategy of Ctrl-V~\cite{luo2025ctrlv}, where high-level structure (bounding box trajectories) is modeled before photorealistic synthesis.
 
+\paragraph{Evaluation of Stage~1.}
+Stage~1 is evaluated by comparing the predicted semantic segmentation maps against the corresponding ground-truth label maps. The Semantic VAE decoder converts the predicted latents back to per-pixel class logits, and the class with the highest logit is selected at each pixel via $\arg\max$. The resulting hard predictions are compared against the ground-truth trainID maps using the confusion-matrix-based formulation defined in Section~\ref{subsec:miou}, yielding mIoU, FW-IoU, pixel accuracy, and mean class accuracy over the full validation set. Because Stage~1 outputs are discrete semantic predictions, the evaluation is exact and does not require any external model. During training, mIoU computed on a held-out validation split serves as the model selection criterion. The checkpoint exhibiting the highest validation mIoU is retained as the best model, and training is halted early if no absolute improvement of at least $0.2\%$ in mIoU is observed over six consecutive validation events.
+
 \subsection{Stage~2: Semantic-to-Video Generation}
 \label{subsec:stage2}
 
@@ -502,6 +495,13 @@ The key advantages of this decomposed architecture are:
     \item \textbf{Strong temporal consistency:} Temporal attention in both stages ensures coherent frame-to-frame transitions.
     \item \textbf{Efficient adaptation:} Frozen backbones with lightweight adapters (finetuned temporal layers in Stage~1, ControlNet in Stage~2) enable training with limited computational resources.
 \end{itemize}
+
+\paragraph{Evaluation of Stage~2.}
+Stage~2 outputs RGB video frames rather than semantic segmentation maps, so a direct pixel-level comparison against ground-truth semantic labels is not applicable. Instead, a pretrained semantic segmentation network is applied to each generated RGB frame to infer its semantic content, and the resulting predictions are compared against the corresponding ground-truth labels. Specifically, a Dilated Residual Network (DRN)~\cite{yu2017dilated} — pre-trained on the KITTI-360 training sequences — serves as the external evaluator. Applying this fixed network to the generated frames and accumulating a confusion matrix against the ground-truth labels yields DRN mIoU, DRN pixel accuracy, DRN mean class accuracy, and DRN FW-IoU for each generated clip, using the metric formulations defined in Section~\ref{subsec:miou}.
+
+This indirect evaluation provides a principled measure of semantic controllability. If the generated RGB frames faithfully preserve the scene layout specified by the conditioning maps, a competent segmentation model applied to those frames should recover predictions that closely match the original ground-truth labels. The DRN mIoU therefore quantifies the extent to which the generation process respects the semantic structure of the conditioning input. It is important to note that DRN mIoU is not a direct measure of photometric generation quality; it reflects semantic consistency as assessed by an external model whose own accuracy on real images forms an implicit performance ceiling.
+
+During Stage~2 training, the early stopping criterion is the Learned Perceptual Image Patch Similarity (LPIPS)~\cite{zhang2018unreasonable} evaluated on held-out validation clips, rather than DRN mIoU. This choice reflects the nature of Stage~2 as an RGB video generation task: LPIPS captures both structural similarity and perceptual appearance using deep feature representations and therefore provides a more sensitive and stable training signal than the computationally expensive DRN-based evaluation. The checkpoint yielding the lowest validation LPIPS is retained as the best model, and training terminates if no absolute reduction of at least $0.005$ in LPIPS is observed over eight consecutive validation events.
 
 \FloatBarrier
 % -----------------------------------------------------------------
