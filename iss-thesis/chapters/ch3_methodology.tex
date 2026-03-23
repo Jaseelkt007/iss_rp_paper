@@ -222,7 +222,7 @@ The frozen decoder core maps latent codes back to 128-channel features through u
     \mathbf{h}_{\text{dec}} = \text{DecCore}(\mathbf{z}) \in \mathbb{R}^{BT \times 128 \times H \times W}.
     \label{eq:dec_features}
 \end{align}
-Features are captured \emph{before} the original RGB output convolution using forward hooks. This is critical: it allows gradient flow through the frozen decoder back to the trainable stem during backpropagation, while completely bypassing the RGB output layer.
+Features are extracted from the decoder core prior to the original RGB output convolution, thereby bypassing the RGB-specific output projection entirely. This is critical: it allows gradient flow through the frozen decoder back to the trainable adapters during backpropagation, while ensuring the RGB output layer is never activated in the semantic pathway.
 
 \paragraph{Semantic Output Adapter (Replacing the RGB Output Head).}
 The pretrained decoder ends with a projection $\mathbb{R}^{128 \times H \times W} \rightarrow \mathbb{R}^{3 \times H \times W}$ that produces RGB pixel values. This is unsuitable for semantic reconstruction because semantics are \emph{categorical}, not continuous. We replace this with a trainable semantic classifier head:
@@ -323,7 +323,9 @@ Stage~1 follows the conditioning design of SVD, which uses two distinct pathways
     \mathbf{s}^{(0)}_{\text{pad}} &= \text{Repeat}(\mathbf{s}^{(0)}, T) \in \mathbb{R}^{B \times T \times 4 \times h \times w}, \label{eq:frame_padding} \\
     \mathbf{g} &= \left[\mathbf{s}^{(0)},\, \ldots,\, \mathbf{s}^{(k-1)},\, \mathbf{s}^{(0)},\, \ldots,\, \mathbf{s}^{(0)},\, \mathbf{s}^{(T-1)}\right] \in \mathbb{R}^{B \times T \times 4 \times h \times w}, \label{eq:cond_latents_stage1}
 \end{align}
-where $k$ denotes the number of initial conditioning semantic frames. The conditioning tensor $\mathbf{g}$ thus contains: (i)~the first $k$ semantic frame latents, (ii)~the initial semantic frame latent repeated for the intermediate frames, and (iii)~the last semantic frame latent for the final position. A critical design requirement is that all conditioning latents---including the repeated intermediate frames---must be encoded using the \emph{same} Semantic VAE as the target latents. Mixing encoders (e.g., using the RGB VAE for intermediate frames) would introduce incompatible latent distributions that the UNet cannot reconcile, as the semantic and RGB latent spaces have fundamentally different statistical properties. This design keeps the entire channel concatenation pathway within the semantic latent space, providing spatial structural anchoring (via the first semantic frame) and temporal boundary constraints (via the first and last semantic frames). The RGB appearance information enters exclusively through the CLIP cross-attention pathway.
+where $k$ denotes the number of initial conditioning semantic frames. The conditioning tensor $\mathbf{g}$ thus contains: (i)~the first $k$ semantic frame latents, (ii)~the initial semantic frame latent repeated for the intermediate frames, and (iii)~the last semantic frame latent for the final position.
+
+A critical design requirement is that all conditioning latents must be encoded using the \emph{same} Semantic VAE as the target latents. Using a different encoder---for example, the RGB VAE for intermediate frames---would introduce incompatible latent distributions. The semantic and RGB latent spaces have fundamentally different statistical properties; the UNet cannot reconcile features drawn from both simultaneously. This constraint keeps the entire channel concatenation pathway within the semantic latent space, providing spatial structural anchoring through the first semantic frame and temporal boundary constraints through the first and last frames. RGB appearance information enters exclusively through the CLIP cross-attention pathway described next.
 
 The final UNet input is formed by concatenating the scaled noisy semantic latents with the conditioning tensor along the channel dimension:
 \begin{align}
@@ -337,7 +339,7 @@ where $\|$ denotes channel-wise concatenation. The UNet thus receives an 8-chann
     \mathbf{c}_{\text{rep}} = \text{RepeatInterleave}(\mathbf{c}^{(0)}, T) \in \mathbb{R}^{(B \cdot T) \times 1 \times d_c},
     \label{eq:clip_repeat}
 \end{align}
-and used as key and value inputs in the cross-attention layers of the \texttt{CrossAttnDownBlockSpatioTemporal} and \texttt{CrossAttnUpBlockSpatioTemporal} blocks. This provides global semantic context from the initial frame that guides the generation of all subsequent frames without requiring explicit per-frame conditioning.
+and used as key and value inputs in the cross-attention layers distributed across the encoder down-sampling blocks and decoder up-sampling blocks of the UNet. This provides global semantic context from the initial frame that guides the generation of all subsequent frames without requiring explicit per-frame conditioning.
 
 \paragraph{Additional Time Embeddings.}
 SVD conditions on auxiliary metadata through sinusoidal time embeddings. Three quantities are encoded and added to the diffusion timestep embedding:
@@ -365,14 +367,7 @@ which upweights denoising at low noise levels, encouraging accurate reconstructi
 The full SVD UNet is finetuned, with the option to restrict gradient updates to only the temporal transformer blocks after an initial warm-up period. This curriculum strategy first allows the model to adapt its full capacity to the semantic domain, then focuses optimization on the temporal layers that govern inter-frame consistency. The Semantic VAE and CLIP encoder remain frozen throughout Stage~1 training. Note that the RGB VAE is not used in Stage~1; all latent encoding (both target and conditioning) is performed exclusively via the Semantic VAE, while the RGB image is only processed by the CLIP encoder for cross-attention conditioning.
 
 \paragraph{Design Rationale.}
-Separating semantic prediction from RGB generation provides several advantages:
-\begin{itemize}
-    \item \textbf{Reduced learning complexity:} The model learns scene \emph{structure} (where objects are and how they move) without simultaneously learning appearance (textures, lighting, colors).
-    \item \textbf{Structural consistency:} Operating in semantic space enforces that generated sequences maintain valid scene layouts.
-    \item \textbf{Parallel training:} Stages~1 and~2 can be trained independently, since Stage~2 uses ground-truth semantic maps during training.
-    \item \textbf{Modular design:} The semantic prediction module can be improved or replaced independently of the video generation module.
-\end{itemize}
-This decomposition mirrors the strategy of Ctrl-V~\cite{luo2025ctrlv}, where high-level structure (bounding box trajectories) is modeled before photorealistic synthesis.
+Separating semantic prediction from RGB generation reduces learning complexity by allowing the model to focus on scene \emph{structure}---object positions and motion---independently of appearance properties such as texture, lighting, and colour. Operating entirely in semantic space also enforces that generated sequences maintain valid scene layouts, since the output space contains only discrete class identities. Furthermore, because Stage~2 uses ground-truth semantic maps during training, the two stages can be optimized independently and in parallel, and the semantic prediction module can be improved or replaced without retraining the video generation stage. This decomposition mirrors the strategy of Ctrl-V~\cite{luo2025ctrlv}, where high-level structure (bounding box trajectories) is modelled before photorealistic synthesis.
 
 \paragraph{Evaluation of Stage~1.}
 Stage~1 is evaluated by comparing the predicted semantic segmentation maps against the corresponding ground-truth label maps. The Semantic VAE decoder converts the predicted latents back to per-pixel class logits, and the class with the highest logit is selected at each pixel via $\arg\max$. The resulting hard predictions are compared against the ground-truth trainID maps using the confusion-matrix-based formulation defined in Section~\ref{subsec:miou}, yielding mIoU, FW-IoU, pixel accuracy, and mean class accuracy over the full validation set. Because Stage~1 outputs are discrete semantic predictions, the evaluation is exact and does not require any external model. During training, mIoU computed on a held-out validation split serves as the model selection criterion. The checkpoint exhibiting the highest validation mIoU is retained as the best model, and training is halted early if no absolute improvement of at least $0.2\%$ in mIoU is observed over six consecutive validation events.
@@ -388,7 +383,7 @@ Stage~2 consists of two parallel processing branches that share the same time em
 \begin{enumerate}
     \item \textbf{Frozen SVD Backbone} ($\theta$): The pretrained SVD UNet, kept entirely frozen. It receives the noisy RGB video latents concatenated with the initial frame conditioning and produces the denoised video prediction. The backbone preserves the high-quality video generation prior learned from large-scale data.
 
-    \item \textbf{Trainable ControlNet} ($\xi$): A copy of the SVD encoder and mid-block, initialized from the pretrained UNet weights. It receives the same 8-channel input as the backbone \emph{plus} the semantic latents as an additional control signal, and produces residual features that are injected into the frozen UNet decoder via zero-initialized convolution layers (see Section~\\ref{subsec:conditioning_mechanisms}).
+    \item \textbf{Trainable ControlNet} ($\xi$): A copy of the SVD encoder and mid-block, initialized from the pretrained UNet weights. It receives the same 8-channel input as the backbone \emph{plus} the semantic latents as an additional control signal, and produces residual features that are injected into the frozen UNet decoder via zero-initialized convolution layers (see Section~\ref{subsec:conditioning_mechanisms}).
 \end{enumerate}
 
 \paragraph{Input Formation.}
@@ -469,13 +464,7 @@ A critical design choice is that Stage~2 uses \emph{ground-truth} semantic maps 
 At \emph{inference} time, the pipeline operates sequentially: Stage~1 generates the semantic video sequence from the initial frame, and Stage~2 then generates the photorealistic RGB video conditioned on the Stage~1 output.
 
 \paragraph{Why Freeze the SVD Backbone?}
-Freezing the SVD UNet during Stage~2 training serves multiple purposes:
-\begin{itemize}
-    \item \textbf{Preserves the pretrained video prior:} The backbone retains its learned knowledge of natural video dynamics, appearance, and temporal coherence.
-    \item \textbf{Prevents catastrophic forgetting:} Training only the ControlNet prevents degradation of the pretrained generation quality.
-    \item \textbf{Parameter efficiency:} Only the ControlNet parameters are updated, reducing GPU memory requirements and accelerating convergence.
-    \item \textbf{Stable conditioning learning:} The ControlNet learns to \emph{steer} the frozen backbone rather than retrain it, inheriting the stability guarantees of the zero-initialized architecture (Section~\\ref{subsec:conditioning_mechanisms}).
-\end{itemize}
+Freezing the SVD UNet during Stage~2 training serves multiple purposes. First, the backbone retains its learned knowledge of natural video dynamics, appearance, and temporal coherence; updating its parameters would risk catastrophic forgetting and degrade the pretrained generation quality. Second, training only the ControlNet parameters substantially reduces GPU memory requirements and accelerates convergence. Third, the zero-initialized residual injection architecture (Section~\ref{subsec:conditioning_mechanisms}) ensures that the ControlNet learns to \emph{steer} the frozen backbone's existing capabilities rather than override them, providing a stable optimization trajectory from the outset.
 
 \paragraph{Full Inference Pipeline.}
 At inference, the complete pipeline operates as follows:
@@ -487,14 +476,7 @@ At inference, the complete pipeline operates as follows:
 \end{enumerate}
 
 \paragraph{Summary of the Two-Stage Design.}
-The key advantages of this decomposed architecture are:
-\begin{itemize}
-    \item \textbf{Structural control:} Semantic maps provide explicit, pixel-level scene specification.
-    \item \textbf{Modular stages:} Each stage can be trained, evaluated, and improved independently.
-    \item \textbf{Parallel training:} Ground-truth semantic conditioning enables simultaneous optimization.
-    \item \textbf{Strong temporal consistency:} Temporal attention in both stages ensures coherent frame-to-frame transitions.
-    \item \textbf{Efficient adaptation:} Frozen backbones with lightweight adapters (finetuned temporal layers in Stage~1, ControlNet in Stage~2) enable training with limited computational resources.
-\end{itemize}
+The decomposed architecture provides explicit, pixel-level scene control through semantic maps while maintaining modularity: each stage can be trained, evaluated, and improved independently. Ground-truth semantic conditioning during Stage~2 training enables the two stages to be optimized in parallel, reducing the overall training time. Temporal attention mechanisms in both stages enforce coherent frame-to-frame transitions. Finally, the use of frozen backbones with lightweight adapters---finetuned temporal layers in Stage~1 and a ControlNet in Stage~2---enables effective training with limited computational resources.
 
 \paragraph{Evaluation of Stage~2.}
 Stage~2 outputs RGB video frames rather than semantic segmentation maps, so a direct pixel-level comparison against ground-truth semantic labels is not applicable. Instead, a pretrained semantic segmentation network is applied to each generated RGB frame to infer its semantic content, and the resulting predictions are compared against the corresponding ground-truth labels. Specifically, a Dilated Residual Network (DRN)~\cite{yu2017dilated} — pre-trained on the KITTI-360 training sequences — serves as the external evaluator. Applying this fixed network to the generated frames and accumulating a confusion matrix against the ground-truth labels yields DRN mIoU, DRN pixel accuracy, DRN mean class accuracy, and DRN FW-IoU for each generated clip, using the metric formulations defined in Section~\ref{subsec:miou}.
