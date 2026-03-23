@@ -170,14 +170,14 @@ When editing Chapter 3 (Methodology) or any section describing the system archit
 5. Update both the table and any in-text references to the same number — never leave them inconsistent
 
 ### Stage 1 canonical results (from `eval_stage1_semantic/eval_results.json`)
-- Checkpoint step: 10200
-- Samples: 170 clips, 25 frames, 192×704
-- Primary metric: mIoU = 40.01%, Pixel Accuracy = 80.84%, Mean Class Accuracy = 53.52%, FW-IoU = 68.75%
+- Checkpoint step: best_checkpoint
+- Samples: full clips, 25 frames, 192×704
+- Primary metric: mIoU = 40.01%, Pixel Accuracy = 80.84%, Mean Class Accuracy = 53.52%, FW-IoU = 68.75% (examples)
 
 ### Stage 2 canonical results (from `eval_stage2_rgb/eval_results.json`)
-- Checkpoint step: 96100
-- Samples: 150 clips, val non-overlapping
-- Primary metric: DRN mIoU = 23.20%, Pixel Accuracy = 67.63%
+- Checkpoint step: best_checkpoint
+- Samples: full clips, val non-overlapping
+- Primary metric: DRN mIoU = 23.20%, Pixel Accuracy = 67.63% (examples)
 - Image/video quality: read from JSON (FID, FVD, LPIPS, SSIM, PSNR — check for null values)
 
 ### When inserting figures from evaluation outputs
