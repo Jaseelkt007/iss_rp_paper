@@ -11,26 +11,18 @@ This chapter describes the dataset, evaluation metrics, the proposed model archi
 \section{Dataset: KITTI-360}
 \label{sec:dataset}
 
-\subsection{Overview}
-\label{subsec:dataset_overview}
+The KITTI-360 dataset~\cite{liao2022kitti360} is a large-scale outdoor benchmark for autonomous driving research, extending the original KITTI dataset~\cite{geiger2012are} with substantially richer semantic and geometric annotations. The data were collected in suburban areas of Karlsruhe, Germany, using a vehicle equipped with two high-resolution stereo cameras, a Velodyne HDL-64E 3D laser scanner, and an OXTS RT3003 GPS/IMU localisation unit. The full dataset comprises approximately 73,000 front-facing camera frames distributed across 11 driving sequences, accompanied by dense 2D semantic and instance segmentation maps, 3D bounding boxes, and accumulated LiDAR point clouds.
 
-The KITTI-360 dataset~\cite{liao2022kitti360} is a large-scale outdoor dataset for autonomous driving research, extending the original KITTI benchmark~\cite{geiger2012are} with richer annotations including dense semantic and instance segmentation, 3D bounding boxes, and accumulated point clouds. The dataset was captured in suburban areas of Karlsruhe, Germany, using a Volkswagen station wagon equipped with:
-\begin{itemize}
-    \item Two high-resolution color cameras (stereo),
-    \item A Velodyne HDL-64E 3D laser scanner,
-    \item An OXTS RT3003 GPS/IMU localization unit.
-\end{itemize}
-
-For this work, we use the front-facing camera (camera~00) images and corresponding semantic segmentation annotations. The dataset is split into 9 driving sequences covering a total of approximately 73,000 frames.
+This work uses the front-facing camera images together with their corresponding 2D semantic segmentation annotations. The dataset is partitioned into training and validation splits along sequence boundaries, ensuring that no frames from the same drive appear in both sets. This non-overlapping split prevents temporal data leakage and guarantees that evaluation is performed on scenes the model has not encountered during training.
 
 \subsection{Semantic Annotations}
 \label{subsec:semantic_annotations}
 
-The semantic annotations use 19 training classes consistent with the Cityscapes label definition~\cite{cordts2016cityscapes}. Raw KITTI-360 label IDs are remapped to continuous training IDs (0--18) using the official \texttt{kitti360scripts} library. Table~\ref{tab:kitti360_classes} lists the semantic classes used.
+The 2D semantic annotations provided with KITTI-360 follow the Cityscapes label taxonomy~\cite{cordts2016cityscapes}, encompassing 19 training categories that cover the principal scene elements of urban and suburban driving environments. Raw dataset annotation identifiers are remapped to contiguous training indices (trainIDs 0--18) according to the official label mapping. Table~\ref{tab:kitti360_classes} lists all 19 semantic categories together with their assigned training indices.
 
 \begin{table}[t]
     \centering
-    \caption{KITTI-360 semantic classes with training IDs used in this work}
+    \caption{KITTI-360 semantic classes with training IDs used in this work.}
     \label{tab:kitti360_classes}
     \begin{tabular}{clcl}
         \toprule
@@ -50,19 +42,16 @@ The semantic annotations use 19 training classes consistent with the Cityscapes 
     \end{tabular}
 \end{table}
 
-\subsection{Data Preparation}
+The class distribution across the dataset is strongly imbalanced: large-area categories such as road, building, and vegetation dominate the pixel counts, whereas classes such as traffic lights, motorcycles, and bicycles occupy relatively few pixels. This imbalance has direct consequences for training and evaluation. During training, the Semantic VAE loss formulation must account for class frequency to avoid the model collapsing to predictions that favour the majority classes. During evaluation, standard pixel accuracy is inadequate as a sole metric for the same reason; frequency-weighted and class-balanced measures are therefore reported in parallel, as described in Section~\ref{subsec:miou}.
+
+\subsection{Data Preparation and Clip Construction}
 \label{subsec:data_preparation}
 
-The official train/validation split files (\texttt{2013\_05\_28\_drive\_train\_frames.txt} and \texttt{2013\_05\_28\_drive\_val\_frames.txt}) define paired RGB and semantic paths. Each pair specifies an RGB image from \texttt{data\_2d\_raw/} and its corresponding semantic label map from \texttt{data\_2d\_semantics/train/}.
+Prior to training, all images are resized from the native camera resolution of $376 \times 1408$ pixels to $192 \times 704$ pixels. Bilinear interpolation is applied to RGB frames to preserve smooth gradients, while nearest-neighbour interpolation is used for semantic label maps to prevent the introduction of spurious class labels at region boundaries.
 
-Key preprocessing steps:
-\begin{itemize}
-    \item \textbf{Resolution:} Images are resized from the original $376 \times 1408$ to $192 \times 704$ using bilinear interpolation for RGB and nearest-neighbor interpolation for semantic maps (to preserve discrete labels).
-    \item \textbf{Clip Formation:} Consecutive frames are grouped into clips of $T=25$ frames for diffusion training and $T=4$ frames for Semantic VAE training.
-    \item \textbf{Normalization:} RGB images are normalized to $[-1, 1]$; semantic labels remain as integer IDs.
-\end{itemize}
+Consecutive annotated frames are grouped into non-overlapping temporal clips for model training. Clips of $T = 25$ frames are used for both Stage~1 and Stage~2 diffusion training, consistent with the Stable Video Diffusion XT (SVD-XT)~\cite{blattmann2023stable} backbone, which operates natively on 25-frame sequences. A shorter clip length of $T = 4$ frames is used for Semantic VAE training, which is appropriate given the compact size of the trainable adapter modules and the fact that the VAE encodes each frame independently. RGB pixel values are normalised to the range $[-1, 1]$. Semantic labels are retained as integer class indices throughout the data pipeline and are converted to one-hot representations only at the Semantic VAE input stage, as described in Section~\ref{subsec:semantic_native_vae}.
 
-The training set contains approximately 49,000 frame pairs. For Semantic VAE training, a subset of 500 clips (2,000 frames at $T=4$) is used due to the small number of trainable parameters, with 200 clips reserved for validation.
+The training split yields approximately 49,000 annotated frame pairs. For Semantic VAE training, a balanced subset of 500 clips is sampled, with 200 clips held out for validation. For the diffusion model stages, training utilises all available sequences from the training split, and evaluation is conducted on 487 non-overlapping clips drawn exclusively from the validation sequences.
 
 \FloatBarrier
 % -----------------------------------------------------------------
@@ -99,20 +88,44 @@ The second evaluation uses a content-debiased FVD (CD-FVD)~\cite{ge2024cdfvd} re
 
 To obtain stable estimates of the Gaussian statistics, FVD is computed over a sufficiently large set of video samples. Following common evaluation practice, approximately 2048 generated videos are used to estimate the feature distributions. Importantly, the sample count refers to the number of video clips rather than individual frames, as each clip contributes a single feature embedding to the distribution.
 
-\subsection{Mean Intersection-over-Union (mIoU)}
+\subsection{Semantic Consistency Metrics}
 \label{subsec:miou}
 
-For evaluating the Semantic VAE, the Mean Intersection-over-Union is the primary metric. For a given class $c$:
+Semantic consistency is a primary evaluation criterion for both stages of the proposed pipeline. However, the two stages differ fundamentally in the type of output they produce. Stage~1 generates semantic segmentation maps directly, enabling exact pixel-level comparison against ground-truth labels. Stage~2 generates RGB video frames, which carry no explicit semantic labels; an external segmentation model must therefore be applied to the generated frames to extract their semantic content before any comparison with ground truth is possible. The following metrics are defined and applied in both evaluation settings.
+
+\paragraph{Mean Intersection-over-Union (mIoU).}
+The primary metric for quantifying semantic accuracy is mean Intersection-over-Union (mIoU). For each semantic class $c$, the Intersection-over-Union score is computed from a global confusion matrix accumulated over all evaluation frames:
 \begin{align}
-    \text{IoU}_c = \frac{|\mathcal{P}_c \cap \mathcal{T}_c|}{|\mathcal{P}_c \cup \mathcal{T}_c|} = \frac{\text{TP}_c}{\text{TP}_c + \text{FP}_c + \text{FN}_c},
+    \text{IoU}_c = \frac{\text{TP}_c}{\text{TP}_c + \text{FP}_c + \text{FN}_c},
     \label{eq:iou}
 \end{align}
-where $\mathcal{P}_c$ and $\mathcal{T}_c$ are the sets of pixels predicted and labeled as class $c$, respectively. The mean IoU averages over all valid classes:
+where $\text{TP}_c$, $\text{FP}_c$, and $\text{FN}_c$ denote the true positive, false positive, and false negative pixel counts for class $c$, respectively. The overall mIoU is the macro-average over all classes that appear in the ground truth:
 \begin{align}
     \text{mIoU} = \frac{1}{|\mathcal{C}_{\text{valid}}|} \sum_{c \in \mathcal{C}_{\text{valid}}} \text{IoU}_c.
     \label{eq:miou}
 \end{align}
-Unlike pixel accuracy, mIoU treats all classes equally regardless of their spatial prevalence, making it sensitive to performance on rare classes such as poles and traffic signs.
+Because every class receives equal weight in Equation~\eqref{eq:miou} regardless of its pixel frequency, mIoU penalises failure on rare but semantically important categories such as poles, traffic signs, and pedestrians. This property makes mIoU the preferred metric for assessing holistic semantic comprehension across an imbalanced class distribution.
+
+\paragraph{Frequency-Weighted IoU (FW-IoU).}
+Standard mIoU treats rare and frequent classes equally, which can make the metric susceptible to large variance from classes that appear in only a small fraction of frames. The frequency-weighted IoU (FW-IoU) addresses this by weighting each class proportionally to its relative pixel frequency in the ground truth:
+\begin{align}
+    \text{FW-IoU} = \sum_{c \in \mathcal{C}_{\text{valid}}} f_c \cdot \text{IoU}_c, \qquad f_c = \frac{N_c}{\sum_{c'} N_{c'}},
+    \label{eq:fwiou}
+\end{align}
+where $N_c$ denotes the total number of ground-truth pixels assigned to class $c$ across the evaluation set. FW-IoU reflects the expected IoU for a randomly sampled pixel and is therefore higher than mIoU when the model performs well on spatially dominant categories such as road and vegetation. Reporting both mIoU and FW-IoU provides complementary perspectives: mIoU is informative about tail-class performance, while FW-IoU reflects practical prediction quality across the natural spatial distribution of the scene.
+
+\paragraph{Additional Pixel-Level Metrics.}
+Alongside mIoU and FW-IoU, overall pixel accuracy and mean class accuracy are reported. Overall pixel accuracy measures the fraction of correctly classified pixels without regard to class imbalance. Mean class accuracy is the macro-average per-class recall, computed as the fraction of ground-truth pixels of each class that are correctly predicted, then averaged uniformly across all classes present in the ground truth.
+
+\paragraph{Stage~1 Evaluation: Direct Semantic Comparison.}
+In Stage~1, the model outputs a sequence of semantic segmentation maps, obtained by decoding the predicted latents through the Semantic VAE and selecting the class with the highest logit at each pixel. The resulting hard predictions are compared directly against the ground-truth trainID maps using the confusion-matrix formulation above. Because the comparison operates in the discrete label space without any intermediate model, the evaluation is exact. During training, mIoU computed on a held-out validation split serves as the model selection criterion: the checkpoint exhibiting the highest validation mIoU is retained, and training is halted early if no absolute improvement of at least $0.2\%$ in mIoU is observed over six consecutive validation events.
+
+\paragraph{Stage~2 Evaluation: DRN-Based Semantic Assessment.}
+Stage~2 outputs RGB video frames rather than semantic maps, so a direct label comparison against ground-truth annotations is not applicable. Instead, a pretrained semantic segmentation network is applied to each generated frame to infer its semantic content, and the resulting predictions are compared against the corresponding ground-truth labels. Specifically, a Dilated Residual Network (DRN)~\cite{yu2017dilated} — using the 105-layer \textit{drn\_d\_105} architecture — pre-trained on the KITTI-360 training sequences is used as the external evaluator. Applying this fixed network to the generated RGB frames and accumulating a confusion matrix against the ground-truth labels yields DRN mIoU, DRN pixel accuracy, DRN mean class accuracy, and DRN FW-IoU for each generated clip.
+
+This approach provides an indirect but principled measure of semantic controllability. If the generated RGB frames faithfully preserve the scene layout specified by the input conditioning maps, a competent segmentation model applied to those frames should recover class predictions that closely match the original ground-truth labels. The DRN mIoU therefore quantifies the extent to which the generation process respects the semantic structure of the conditioning input. It is important to note that DRN mIoU is not a direct measure of photometric generation quality; it reflects semantic consistency as assessed by an external model whose own accuracy on real images forms an implicit performance ceiling.
+
+During Stage~2 training, the early stopping criterion is the Learned Perceptual Image Patch Similarity (LPIPS)~\cite{zhang2018unreasonable} evaluated on held-out validation clips, rather than DRN mIoU. This choice reflects the nature of Stage~2 as an RGB video generation task: LPIPS captures both structural similarity and perceptual appearance quality using deep feature representations and is therefore a more sensitive and stable indicator of model improvement during the RGB generation phase. The checkpoint yielding the lowest validation LPIPS is retained, and training terminates if no absolute reduction of at least $0.005$ in LPIPS is observed over eight consecutive validation events.
 
 \subsection{Additional Video Quality Metrics}
 \label{subsec:additional_metrics}
