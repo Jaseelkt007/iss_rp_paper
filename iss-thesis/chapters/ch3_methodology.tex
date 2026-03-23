@@ -91,7 +91,7 @@ To obtain stable estimates of the Gaussian statistics, FVD is computed over a su
 \subsection{Semantic Consistency Metrics}
 \label{subsec:miou}
 
-Semantic consistency is a primary evaluation criterion for this work. Two complementary evaluation modalities are used depending on the type of model output being assessed. When a model produces semantic segmentation maps directly, the predicted class indices can be compared pixel-by-pixel against ground-truth labels. When a model produces RGB video frames, no explicit semantic labels are available in the output; a pretrained segmentation network must therefore first be applied to the generated frames to extract semantic predictions, which are then compared against the ground truth. Both modalities use the same family of confusion-matrix-based metrics, defined below.
+Semantic consistency is a primary evaluation criterion for both stages of the proposed pipeline. The following metrics are defined here and applied in the evaluation of both stages; the specific evaluation procedures for Stage~1 and Stage~2 differ in how predictions are obtained and are described in Sections~\ref{subsec:stage1} and~\ref{subsec:stage2} respectively.
 
 \paragraph{Mean Intersection-over-Union (mIoU).}
 The primary metric for quantifying semantic accuracy is mean Intersection-over-Union (mIoU). For each semantic class $c$, the Intersection-over-Union score is computed from a global confusion matrix accumulated over all evaluation frames:
@@ -99,28 +99,23 @@ The primary metric for quantifying semantic accuracy is mean Intersection-over-U
     \text{IoU}_c = \frac{\text{TP}_c}{\text{TP}_c + \text{FP}_c + \text{FN}_c},
     \label{eq:iou}
 \end{align}
-where $\text{TP}_c$, $\text{FP}_c$, and $\text{FN}_c$ denote the true positive, false positive, and false negative pixel counts for class $c$, respectively. The overall mIoU is the macro-average over all classes present in the ground truth:
+where $\text{TP}_c$, $\text{FP}_c$, and $\text{FN}_c$ denote the true positive, false positive, and false negative pixel counts for class $c$, respectively. The overall mIoU is the macro-average over all classes that appear in the ground truth:
 \begin{align}
     \text{mIoU} = \frac{1}{|\mathcal{C}_{\text{valid}}|} \sum_{c \in \mathcal{C}_{\text{valid}}} \text{IoU}_c.
     \label{eq:miou}
 \end{align}
-Because every class receives equal weight in Equation~\eqref{eq:miou} regardless of pixel frequency, mIoU penalises failure on rare but semantically important categories such as poles, traffic signs, and pedestrians. This makes it the primary indicator of holistic semantic comprehension across the imbalanced KITTI-360 class distribution.
+Because every class receives equal weight in Equation~\eqref{eq:miou} regardless of its pixel frequency, mIoU penalises failure on rare but semantically important categories such as poles, traffic signs, and pedestrians. This property makes mIoU the preferred metric for assessing holistic semantic comprehension across an imbalanced class distribution.
 
 \paragraph{Frequency-Weighted IoU (FW-IoU).}
-Standard mIoU treats rare and frequent classes equally, which can make the metric susceptible to high variance from categories that appear in only a small fraction of frames. The frequency-weighted IoU (FW-IoU) addresses this by weighting each class proportionally to its relative pixel frequency in the ground truth:
+Standard mIoU treats rare and frequent classes equally, which can make the metric susceptible to large variance from classes that appear in only a small fraction of frames. The frequency-weighted IoU (FW-IoU) addresses this by weighting each class proportionally to its relative pixel frequency in the ground truth:
 \begin{align}
     \text{FW-IoU} = \sum_{c \in \mathcal{C}_{\text{valid}}} f_c \cdot \text{IoU}_c, \qquad f_c = \frac{N_c}{\sum_{c'} N_{c'}},
     \label{eq:fwiou}
 \end{align}
-where $N_c$ denotes the total number of ground-truth pixels assigned to class $c$ across the evaluation set. FW-IoU reflects the expected IoU for a randomly sampled pixel and is therefore higher than mIoU when the model performs well on spatially dominant categories such as road and vegetation. Reporting both metrics provides complementary perspectives: mIoU captures tail-class performance, while FW-IoU reflects practical prediction quality across the natural spatial distribution of the scene.
+where $N_c$ denotes the total number of ground-truth pixels assigned to class $c$ across the evaluation set. FW-IoU reflects the expected IoU for a randomly sampled pixel and is therefore higher than mIoU when the model performs well on spatially dominant categories such as road and vegetation. Reporting both mIoU and FW-IoU provides complementary perspectives: mIoU is informative about tail-class performance, while FW-IoU reflects practical prediction quality across the natural spatial distribution of the scene.
 
 \paragraph{Additional Pixel-Level Metrics.}
-Alongside mIoU and FW-IoU, overall pixel accuracy and mean class accuracy are reported. Overall pixel accuracy measures the fraction of correctly classified pixels without regard to class imbalance. Mean class accuracy is the macro-average per-class recall — the fraction of ground-truth pixels of each class that are correctly predicted — averaged uniformly across all classes present in the ground truth.
-
-\paragraph{DRN-Based mIoU for RGB Frame Evaluation.}
-When the model under evaluation produces RGB video frames rather than semantic maps, the above metrics cannot be applied directly. To address this, a pretrained Dilated Residual Network (DRN)~\cite{yu2017dilated} is used as an external semantic segmentation oracle. The DRN model, trained on the KITTI-360 training sequences using the 105-layer \emph{drn\_d\_105} architecture, is applied to each generated RGB frame to produce per-pixel class predictions. These predictions are then compared against the corresponding ground-truth label maps using the same confusion-matrix formulation, yielding DRN mIoU, DRN FW-IoU, DRN pixel accuracy, and DRN mean class accuracy.
-
-This approach provides an indirect but principled measure of semantic controllability. If a generated RGB frame faithfully preserves the scene layout encoded in the conditioning semantic map, a well-trained segmentation model applied to that frame should recover class predictions that closely match the original ground-truth labels. The DRN mIoU therefore quantifies the extent to which the generation process respects the semantic structure of its conditioning input. It is important to note that DRN mIoU is not a direct measure of photometric quality; it reflects semantic consistency as assessed by an external model, and the DRN's own segmentation accuracy on real images constitutes an implicit performance ceiling for this metric.
+Alongside mIoU and FW-IoU, overall pixel accuracy and mean class accuracy are reported. Overall pixel accuracy measures the fraction of correctly classified pixels without regard to class imbalance. Mean class accuracy is the macro-average per-class recall, computed as the fraction of ground-truth pixels of each class that are correctly predicted, then averaged uniformly across all classes present in the ground truth.
 
 \subsection{Additional Video Quality Metrics}
 \label{subsec:additional_metrics}
@@ -502,7 +497,11 @@ The key advantages of this decomposed architecture are:
 \end{itemize}
 
 \paragraph{Evaluation of Stage~2.}
-Stage~2 outputs RGB video frames, so semantic consistency is assessed using the DRN-based mIoU methodology defined in Section~\ref{subsec:miou}. The pretrained DRN segmentation model is applied to each generated frame, and the resulting predictions are compared against the ground-truth label maps, yielding DRN mIoU, DRN FW-IoU, DRN pixel accuracy, and DRN mean class accuracy over the validation set. During training, the early stopping criterion is the Learned Perceptual Image Patch Similarity (LPIPS)~\cite{zhang2018unreasonable} evaluated on held-out validation clips. This choice reflects the nature of Stage~2 as an RGB video generation task: LPIPS captures both structural similarity and perceptual appearance quality using deep feature representations and therefore provides a more sensitive and stable training signal than the computationally expensive DRN-based evaluation. The checkpoint yielding the lowest validation LPIPS is retained, and training terminates if no absolute reduction of at least $0.005$ in LPIPS is observed over eight consecutive validation events.
+Stage~2 outputs RGB video frames rather than semantic segmentation maps, so a direct pixel-level comparison against ground-truth semantic labels is not applicable. Instead, a pretrained semantic segmentation network is applied to each generated RGB frame to infer its semantic content, and the resulting predictions are compared against the corresponding ground-truth labels. Specifically, a Dilated Residual Network (DRN)~\cite{yu2017dilated} — pre-trained on the KITTI-360 training sequences — serves as the external evaluator. Applying this fixed network to the generated frames and accumulating a confusion matrix against the ground-truth labels yields DRN mIoU, DRN pixel accuracy, DRN mean class accuracy, and DRN FW-IoU for each generated clip, using the metric formulations defined in Section~\ref{subsec:miou}.
+
+This indirect evaluation provides a principled measure of semantic controllability. If the generated RGB frames faithfully preserve the scene layout specified by the conditioning maps, a competent segmentation model applied to those frames should recover predictions that closely match the original ground-truth labels. The DRN mIoU therefore quantifies the extent to which the generation process respects the semantic structure of the conditioning input. It is important to note that DRN mIoU is not a direct measure of photometric generation quality; it reflects semantic consistency as assessed by an external model whose own accuracy on real images forms an implicit performance ceiling.
+
+During Stage~2 training, the early stopping criterion is the Learned Perceptual Image Patch Similarity (LPIPS)~\cite{zhang2018unreasonable} evaluated on held-out validation clips, rather than DRN mIoU. This choice reflects the nature of Stage~2 as an RGB video generation task: LPIPS captures both structural similarity and perceptual appearance using deep feature representations and therefore provides a more sensitive and stable training signal than the computationally expensive DRN-based evaluation. The checkpoint yielding the lowest validation LPIPS is retained as the best model, and training terminates if no absolute reduction of at least $0.005$ in LPIPS is observed over eight consecutive validation events.
 
 \FloatBarrier
 % -----------------------------------------------------------------
