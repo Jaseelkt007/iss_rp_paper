@@ -136,21 +136,13 @@ In addition to FID and FVD, we report several complementary metrics:
 \subsection{Overview of the Two-Stage Pipeline}
 \label{subsec:pipeline_overview}
 
-The proposed pipeline, illustrated in Figure~\ref{fig:pipeline_overview}, consists of three components:
+The proposed pipeline consists of three components:
 
 \begin{enumerate}
     \item \textbf{Semantic VAE} (pretrained, frozen during diffusion training): Encodes semantic label maps into and decodes them from the latent space shared with the RGB VAE.
     \item \textbf{Stage~1 --- Semantic Prediction Model:} A diffusion model that predicts future semantic video latents given an initial RGB frame.
     \item \textbf{Stage~2 --- Semantic-to-Video Model:} A ControlNet-conditioned diffusion model that generates RGB video latents conditioned on semantic video latents.
 \end{enumerate}
-
-\begin{figure}[t]
-    \centering
-    % TODO: Replace with actual pipeline diagram
-    \includegraphics[width=0.9\textwidth]{images/ctrl_v_pipleline.png}
-    \caption{Overview of the proposed two-stage pipeline for semantically controlled video generation. The Semantic VAE bridges discrete semantic maps and continuous latent space. Stage~1 predicts future semantic sequences. Stage~2 generates photorealistic RGB video conditioned on the predicted semantics.}
-    \label{fig:pipeline_overview}
-\end{figure}
 
 \subsection{Semantic-Native VAE}
 \label{subsec:semantic_native_vae}
@@ -279,7 +271,14 @@ The Semantic Stem contains approximately 10,000 parameters and the Semantic Head
 \subsection{Stage~1: Semantic Video Prediction}
 \label{subsec:stage1}
 
-Stage~1 is responsible for predicting a temporally coherent sequence of semantic segmentation maps conditioned on a single RGB frame. This stage adapts the Stable Video Diffusion (SVD) backbone to operate in the latent space of semantic segmentation rather than RGB space. The model learns to generate plausible future scene layouts---road geometry, object positions, and semantic structure---from a single initial observation.
+Stage~1 is responsible for predicting a temporally coherent sequence of semantic segmentation maps conditioned on a single RGB frame. This stage adapts the Stable Video Diffusion (SVD) backbone to operate in the latent space of semantic segmentation rather than RGB space. The model learns to generate plausible future scene layouts---road geometry, object positions, and semantic structure---from a single initial observation. Figure~\ref{fig:stage1_pipeline} summarises the Stage~1 processing flow.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=0.95\textwidth]{images/stage1_pipeline.pdf}
+    \caption{Stage~1 semantic video prediction pipeline. The initial RGB frame provides global scene context through the frozen CLIP encoder, while the ground-truth semantic segmentation maps are encoded by the frozen Semantic VAE into semantic latents. The diffusion backbone predicts denoised semantic latents, which are decoded back into semantic segmentation maps.}
+    \label{fig:stage1_pipeline}
+\end{figure}
 
 \paragraph{Semantic Latent Encoding.}
 Ground-truth semantic segmentation maps are converted into continuous latent representations using the Semantic-Native VAE described in Section~\ref{subsec:semantic_native_vae}. The Semantic VAE is \emph{frozen} during Stage~1 training:
@@ -375,7 +374,14 @@ Stage~1 is evaluated by comparing the predicted semantic segmentation maps again
 \subsection{Stage~2: Semantic-to-Video Generation}
 \label{subsec:stage2}
 
-Stage~2 generates photorealistic RGB video conditioned on semantic segmentation maps. This stage uses a video-adapted ControlNet architecture~\cite{zhang2023adding} that injects semantic conditioning into the frozen SVD backbone, learning to translate semantic layouts into realistic driving scenes while preserving temporal coherence.
+Stage~2 generates photorealistic RGB video conditioned on semantic segmentation maps. This stage uses a video-adapted ControlNet architecture~\cite{zhang2023adding} that injects semantic conditioning into the frozen SVD backbone, learning to translate semantic layouts into realistic driving scenes while preserving temporal coherence. Figure~\ref{fig:stage2_pipeline} illustrates the Stage~2 generation process.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=0.95\textwidth]{images/stage2_pipeline.pdf}
+    \caption{Stage~2 semantic-to-video generation pipeline. Ground-truth semantic segmentation maps are encoded into semantic latents that condition the ControlNet branch, while the initial RGB frame is encoded by the frozen CLIP encoder and RGB VAE to provide appearance and frame conditioning. The frozen SVD backbone and ControlNet jointly predict RGB video latents, which are decoded into the final photorealistic video sequence.}
+    \label{fig:stage2_pipeline}
+\end{figure}
 
 \paragraph{Architectural Overview.}
 Stage~2 consists of two parallel processing branches that share the same time embeddings and cross-attention conditioning:
