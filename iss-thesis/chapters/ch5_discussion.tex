@@ -4,7 +4,7 @@
 \chapter{Discussion}
 \label{ch:discussion}
 
-This chapter analyzes the experimental results, discusses training challenges, evaluates the limitations of the employed metrics, and provides a comparison with related work.
+This chapter analyzes the Stage~1 experimental results, examines the architectural limitations of semantic video prediction, discusses how the current evaluation protocol should be interpreted, and outlines the most justified next design directions.
 
 \FloatBarrier
 % -----------------------------------------------------------------
@@ -27,143 +27,95 @@ The +14.7\% mIoU improvement from boundary weighting alone (Phase~2a, $\alpha=0 
 \paragraph{Dice Loss and Class Balance.}
 The Dice loss provides a more modest improvement (+1.7\% mIoU) but is critical for rare classes. Traffic signs, which occupy only $\sim$12K pixels out of $\sim$54M in the validation set (0.02\%), improve from 78.2\% to 82.2\% IoU with Dice loss. Without it, the cross-entropy gradient is dominated by the $\sim$14.6M vegetation pixels, effectively ignoring classes with three orders of magnitude fewer pixels.
 
-\subsection{Video Generation Quality}
-\label{subsec:video_quality}
+\subsection{Stage~1 Semantic Prediction}
+\label{subsec:stage1_discussion}
 
-Stage~2 achieves an FID of 68.47 and FVD of 595.52, placing our method in the mid-range for domain-specific video generation on the challenging KITTI-360 dataset. It is important to note that these quality metrics were computed on 10 validation videos (250 frame pairs), while the semantic fidelity metrics (mIoU, pixel accuracy) were computed on the full 150-clip evaluation set. The limited sample size for FID/FVD means these estimates carry inherent uncertainty and should be interpreted as indicative rather than definitive.
+The Stage~1 results in Section~\ref{sec:stage1_results} show that the model learns the coarse structure of driving scenes, but not balanced future semantic forecasting. This interpretation becomes even clearer in a broader diagnostic evaluation of the current best checkpoint on 487 KITTI-360 validation clips of 25 frames at $192 \times 704$, where the model reaches 35.45\% mIoU, 80.13\% pixel accuracy, 45.41\% mean class accuracy, and 67.71\% frequency-weighted IoU. The comparatively high pixel accuracy together with the much lower mIoU indicates that dominant classes account for most correct predictions, while minority classes remain weakly modeled. Stage~1 therefore behaves more like a structured scene-persistence model than a balanced semantic forecaster.
 
-\paragraph{FID Analysis.}
-An FID of 68.47 indicates that the distribution of generated frames captures the general appearance characteristics of real KITTI-360 driving scenes. This value falls within the acceptable range (50--100) for domain-specific video generation, where the target distribution is a single driving dataset rather than a diverse natural image benchmark. State-of-the-art unconditional image generation on standard benchmarks achieves FID scores below 5, but the specialized driving domain, wide-aspect-ratio resolution ($192 \times 704$), and limited training data make direct comparison to benchmark results inappropriate.
+Per-class IoU supports this interpretation. Large and mostly static classes remain comparatively strong, with 84.39\% for road, 67.05\% for building, 72.02\% for vegetation, and 69.43\% for sky. By contrast, thin or rare classes collapse, including 10.20\% for pole, 5.60\% for rider, 6.63\% for bus, 0.02\% for train, and 0.00\% for both traffic light and bicycle. When grouped by semantic difficulty, large static classes average 65.86\% IoU whereas thin and small classes average only 7.81\%. The error pattern is therefore not random; it follows the architectural bias of the current pipeline toward persistent, spatially extended structure.
 
-\paragraph{FVD Analysis.}
-The FVD of 595.52 reflects the temporal consistency of generated videos. This metric captures both per-frame quality and inter-frame coherence via I3D video features. The value indicates moderate temporal consistency, with some frame-to-frame variation expected for diffusion-based generation where each frame is denoised within a shared temporal attention framework. The ControlNet contributes spatial conditioning but does not enforce explicit temporal smoothing, which contributes to the observed FVD score.
-
-\paragraph{LPIPS and SSIM.}
-The LPIPS score of 0.334 and SSIM of 0.433 indicate moderate frame-level perceptual and structural similarity to ground truth. These values are expected for a generative model: unlike reconstruction-based approaches, diffusion models produce \emph{plausible} outputs conditioned on semantic structure rather than attempting pixel-identical copies. Multiple valid RGB realizations exist for any given semantic map, and perfect pixel-level correspondence with one specific ground-truth frame is neither expected nor necessary.
+The clip-level distribution reveals the same tendency. Across the 487 validation clips, the mean clip mIoU is 42.85\% with a standard deviation of 10.55\%, the median is 43.24\%, and the range spans from 13.49\% to 71.19\%. More importantly, some clips exhibit very high pixel accuracy despite poor mIoU, for example 24.26\% mIoU at 99.25\% pixel accuracy and 28.27\% mIoU at 97.24\% pixel accuracy. Such cases show that the model can reproduce the dominant background layout while still missing the minority classes that determine semantic completeness. This discrepancy motivates a discussion centered on conditioning, representation, and motion observability rather than on average pixel agreement alone.
 
 \FloatBarrier
 % -----------------------------------------------------------------
-\section{Training Instabilities}
-\label{sec:instabilities}
+\section{Architectural Limitations of Stage~1}
+\label{sec:stage1_limitations}
 
-Several training instabilities were encountered and addressed during the development of the pipeline.
+This section examines the components of the current Stage~1 design that most plausibly explain the observed class-wise failure pattern.
 
-\subsection{Semantic VAE Instabilities}
-\label{subsec:vae_instabilities}
+\subsection{Copy-Forward Bias from Repeated Semantic Anchors}
+\label{subsec:copy_forward_bias}
 
-\paragraph{Gradient Flow Through Frozen Layers.}
-The Semantic-Native VAE requires gradients to flow from the trainable Semantic Head, backward through the frozen decoder core, through the frozen encoder core, and into the trainable Semantic Stem. Although the frozen layers do not update their weights, they must remain in the computation graph for gradient propagation. Initial experiments with \texttt{torch.no\_grad()} on the VAE core blocked this gradient flow, resulting in the stem not learning. The solution was to set \texttt{requires\_grad\_(False)} on VAE parameters (preventing weight updates) while keeping the forward pass within the autograd graph.
+The strongest inductive bias in the current pipeline is temporal persistence. During denoising, the first-frame semantic representation is injected not only at the beginning of the sequence but repeatedly across the intermediate temporal slots, and an additional ground-truth semantic anchor is provided at the final frame. The easiest solution under this conditioning scheme is to preserve the initial layout unless the denoiser finds strong evidence to modify it. This behavior is beneficial for road, building, vegetation, and sky, whose spatial arrangement changes slowly, but it penalizes riders, bicycles, traffic lights, and other structures whose future state differs substantially from the first frame. The per-class IoU pattern described above matches this bias closely, indicating that the dominant limitation is not a failure to represent the scene at all, but a preference for propagating the first visible configuration forward in time.
 
-\paragraph{Per-Frame Decoding Necessity.}
-The SVD temporal decoder expects a specific number of frames ($T_{\text{dec}}$) and applies temporal convolutions across them. Attempting to decode entire clips ($T=4$) simultaneously caused shape mismatches in the temporal layers. The workaround was to decode each frame independently ($T_{\text{dec}}=1$), which sacrifices some temporal coherence in the decoder's intermediate features but produces correct spatial features. The Semantic Head's 3D convolutions compensate by re-introducing temporal consistency at the output stage.
+The current error profile is unlikely to be explained only by insufficient trainable capacity. In the best-performing configuration, the denoising backbone is no longer restricted to a narrow temporal-only update regime, yet minority-class performance remains poor. This observation suggests that the main bottlenecks lie in the conditioning design and the representation itself, rather than in an overly frozen network. The Stage~1 problem is therefore better understood as a misaligned forecasting formulation than as a simple optimization deficit.
 
-\paragraph{Forward Hook Strategy.}
-Extracting the 128-channel features before the decoder's final output convolution (which maps 128$\rightarrow$3 for RGB) required PyTorch forward hooks. The hook must be registered on the correct layer (\texttt{conv\_act}, the activation before \texttt{conv\_out}) and must not detach tensors from the computation graph. Careful management of hook registration and removal was necessary to avoid memory leaks during training.
+\subsection{Compression and Prior Mismatch}
+\label{subsec:compression_prior}
 
-\subsection{Diffusion Training Instabilities}
-\label{subsec:diffusion_instabilities}
+The latent representation further amplifies this persistence bias. Semantic segmentation maps are encoded at an effective spatial resolution of $24 \times 88$, which corresponds to an $8\times$ downsampling of the $192 \times 704$ input. This compression is manageable for broad surfaces such as road or sky, but it is severe for poles, traffic lights, bicycles, or partially occluded pedestrians, which may occupy only a few pixels after resizing. Once these structures are compressed into a very small number of latent cells, subsequent denoising cannot reliably reconstruct class boundaries that were weakly represented at the input. The success of the Semantic VAE in Section~\ref{subsec:vae_analysis} shows that semantic information can be encoded effectively, but the forecasting stage still has to infer future changes after this compression has already removed much of the fine detail.
 
-\paragraph{Semantic ID Remapping.}
-KITTI-360 uses sparse label IDs (e.g., ID 24 for ``person'', ID 26 for ``car'') that must be remapped to continuous training IDs (0--18) before encoding by the Semantic VAE. An early bug where raw IDs were passed without remapping caused the one-hot encoding to fail silently (IDs $>$ 18 were clamped to 18), producing incorrect semantic latents. This was resolved by adding explicit remapping in the dataset loader.
+A second source of mismatch comes from the inherited RGB-video prior of the denoising backbone. The backbone was originally pretrained for natural-video latent denoising, where smooth appearance continuity is beneficial. Stage~1 instead requires categorical boundary preservation, class-balanced reasoning, and accurate updates to small moving objects. Even after fine-tuning, an RGB-oriented prior naturally favours coarse scene continuity over discrete semantic transitions. This helps explain why the model remains competent on large static regions while underperforming on minority classes whose identity is defined by sharp boundaries and local motion.
 
-\paragraph{Latent Space Consistency in Stage~1 Conditioning.}
-A critical training instability arose from inconsistent latent space usage in the Stage~1 conditioning pathway. The SVD-based UNet receives an 8-channel input per frame, formed by concatenating 4 channels of noisy target latents with 4 channels of conditioning latents. The conditioning tensor contains the first-frame semantic latent as an anchor, repeated for intermediate frames. An early implementation inadvertently encoded the repeated intermediate conditioning frames using the RGB VAE rather than the Semantic VAE. Since the RGB VAE and Semantic VAE encode fundamentally different signals into the same 4-dimensional latent shape but with incompatible statistical distributions, the UNet received mixed-space inputs where anchor frames (encoded via Semantic VAE) and intermediate frames (encoded via RGB VAE) were incoherent with each other. This caused the model to learn only from the anchor frames while ignoring intermediate conditioning, resulting in severely degraded mIoU on non-anchor frames. The fix required ensuring that \emph{all} components of the conditioning tensor---including intermediate frames---are encoded exclusively through the Semantic VAE, maintaining a consistent latent space throughout the conditioning pathway.
+\subsection{Latent Calibration and Objective Mismatch}
+\label{subsec:latent_calibration}
 
-\paragraph{VAE Freezing Verification.}
-During Stage~1 and Stage~2 training, the Semantic VAE must be fully frozen. An explicit verification step was added to the training loop to confirm that no Semantic VAE parameters have \texttt{requires\_grad} set to \texttt{True}. Without this check, accidental unfreezing caused by library updates or configuration changes would allow the VAE to drift during training, invalidating the shared latent space assumption and corrupting the learned conditioning pathway.
+The latent statistics indicate an additional calibration problem. A diagnostic report on the semantic latent distribution shows a global standard deviation of 9.4974 before scaling. Reusing the RGB-latent scaling factor of 0.18215 produces a scaled standard deviation of 1.7299, whereas a semantic-specific factor of approximately 0.1053 would be required to approach unit variance. In practical terms, the semantic signal enters diffusion at a larger magnitude than the original SVD noise schedule assumes. This does not invalidate training, but it changes the effective signal-to-noise ratio and makes optimization less well aligned with the pretrained backbone.
 
-\paragraph{Memory Management.}
-Training Stage~2 (SVD UNet + ControlNet) on 25-frame clips at $192 \times 704$ resolution pushes GPU memory to the limit. Gradient checkpointing, FP16 mixed precision, and a batch size of 1 (with gradient accumulation) were all necessary to fit within 48~GB VRAM. Occasional out-of-memory (OOM) errors were addressed by reducing the number of data loader workers and enabling CUDA memory pooling.
+The training objective compounds this issue. Stage~1 is optimized primarily in continuous latent space, which is suitable for preserving coarse consistency but does not directly reward class-balanced semantic correctness. Large contiguous regions therefore dominate the loss, while missing a small traffic light or bicycle contributes comparatively little to the optimization signal. The persistent gap between pixel accuracy and mIoU is consistent with this formulation. A model trained under such an objective is expected to prioritize the classes that occupy most pixels, even when the resulting semantic map is incomplete from a perception perspective.
 
-\FloatBarrier
-% -----------------------------------------------------------------
-\section{Limitations of Evaluation Metrics}
-\label{sec:metric_limitations}
+\subsection{Insufficient Motion Information}
+\label{subsec:motion_information}
 
-\subsection{FID Limitations}
-\label{subsec:fid_limitations}
-
-FID has several well-known limitations that are particularly relevant in our setting:
-\begin{itemize}
-    \item \textbf{Gaussian Assumption:} FID assumes that Inception features follow a multivariate Gaussian distribution, which may not hold for diverse driving scenes.
-    \item \textbf{Sample Size Sensitivity:} FID estimates are biased for small sample sizes. Our FID and FVD evaluation uses 10 validation videos (250 frames), which provides only a coarse estimate of the true generative distribution. The semantic fidelity evaluation on 150 clips provides a more statistically reliable quality signal.
-    \item \textbf{Frame Independence:} FID treats each frame independently and does not capture temporal relationships.
-    \item \textbf{Inception Bias:} The Inception-v3 network was trained on ImageNet, which has limited overlap with driving scenes. Features may not capture domain-specific quality aspects.
-\end{itemize}
-
-\subsection{FVD Limitations}
-\label{subsec:fvd_limitations}
-
-FVD partially addresses the temporal limitation of FID but introduces its own issues:
-\begin{itemize}
-    \item \textbf{I3D Action Bias:} The I3D network was trained for action recognition on Kinetics-400. Its features are optimized for human actions, not driving scenarios. Vehicle motion, road geometry, and traffic patterns may be underrepresented in the feature space.
-    \item \textbf{Fixed Temporal Window:} I3D processes clips of a fixed length, which may not align with the 25-frame clips used in our experiments, requiring padding or subsampling.
-    \item \textbf{Computational Cost:} FVD computation requires extracting I3D features from all generated and real videos, which is computationally expensive for large-scale evaluation.
-\end{itemize}
-
-\subsection{mIoU for VAE Evaluation}
-\label{subsec:miou_limitations}
-
-While mIoU is the standard metric for semantic segmentation, its use for evaluating a VAE's reconstruction quality has a subtle limitation: it equally weights all classes regardless of their visual importance. A class that is visually critical (e.g., cars) but spatially small may have the same mIoU weight as a less important but spatially dominant class (e.g., sky). Weighted mIoU variants could address this, but we use the standard unweighted version for comparability with the literature.
+The conditioning bandwidth is also too narrow for genuine motion reasoning. The model receives only a single RGB frame through a global visual embedding and does not explicitly observe ego-motion, depth, optical flow, camera pose, or multiple preceding frames. However, future semantics in driving scenes are determined not only by appearance but also by geometry and motion. Occlusion changes, turning trajectories, relative scale changes, and new object entries cannot be inferred reliably from a single static global descriptor. The current conditioning therefore encourages the model to predict the most persistent semantic arrangement compatible with the first frame, which is precisely the behavior reflected in the per-class results.
 
 \FloatBarrier
 % -----------------------------------------------------------------
-\section{Comparison with Related Work}
-\label{sec:comparison}
+\section{Evaluation Protocol and Metric Interpretation}
+\label{sec:stage1_metrics}
 
-\subsection{Comparison with Ctrl-V}
-\label{subsec:comparison_ctrlv}
+This section discusses how the current Stage~1 evaluation setup should be interpreted when reading the reported scores.
 
-Our approach extends Ctrl-V~\cite{luo2025ctrlv} by replacing bounding-box conditioning with semantic segmentation maps. Table~\ref{tab:comparison_ctrlv} summarizes the key differences.
+\subsection{What the Current Stage~1 Score Measures}
+\label{subsec:stage1_protocol}
 
-\begin{table}[t]
-    \centering
-    \caption{Comparison between Ctrl-V (original) and our semantic extension}
-    \label{tab:comparison_ctrlv}
-    \begin{tabular}{lcc}
-        \toprule
-        \textbf{Aspect} & \textbf{Ctrl-V (BBox)} & \textbf{Ours (Semantic)} \\
-        \midrule
-        Control signal & 2D/3D bounding boxes & Semantic segmentation maps \\
-        Control density & Sparse (box outlines) & Dense (per-pixel labels) \\
-        Scene control & Object positions only & Full scene layout \\
-        VAE requirement & Standard RGB VAE & Semantic-Native VAE \\
-        Stage~1 output & BBox trajectory video & Semantic video \\
-        Stage~2 input & BBox frames & Semantic frames \\
-        Background control & None & Full (road, vegetation, sky) \\
-        Object shape control & None (box only) & Precise silhouettes \\
-        \bottomrule
-    \end{tabular}
-\end{table}
+The current Stage~1 score should not be interpreted as pure prediction from the first RGB frame alone. In the present formulation, the denoiser is guided by a repeated first-frame semantic prior throughout the intermediate frames and also receives a ground-truth semantic anchor at the final frame. The resulting task is therefore better described as boundary-conditioned semantic sequence generation than as unconstrained future forecasting. This distinction is important because the end-point anchor reduces uncertainty about long-range scene evolution and makes the task easier than a strict frame-0-only setting. The current score remains useful, but it should be interpreted as measuring how well the model fills in a semantic trajectory between strong structural anchors.
 
-The key advantage of semantic conditioning is \textbf{dense scene control}: while bounding boxes specify only the positions and extents of objects, semantic maps specify the class of every pixel, including background elements (roads, buildings, vegetation, sky) that bounding boxes cannot control. This enables more precise and comprehensive scene specification, which is particularly valuable for synthetic data generation where pixel-level annotations are required.
+This protocol choice also helps explain why the model performs best in clips with gradual scene evolution. When the future remains close to the initial layout, interpolation between anchors is sufficient to produce plausible semantics. When the scene contains new dynamic agents, thin emerging structures, or substantial ego-motion, the anchor-based formulation provides less useful guidance for intermediate frames. The current evaluation thus reveals a real capability, namely temporally coherent semantic interpolation, but it does not yet isolate the harder task of open-ended semantic forecasting.
 
-The trade-off is increased complexity: our approach requires a custom Semantic VAE to bridge the gap between discrete semantic labels and the continuous latent space, whereas Ctrl-V uses the standard RGB VAE to encode bounding box images (which are simply colored rectangles on a black background).
+\subsection{Why mIoU Must Be Read Together with Pixel Accuracy}
+\label{subsec:stage1_metric_reading}
 
-\subsection{Comparison with GAN-Based Methods}
-\label{subsec:comparison_gans}
+For Stage~1, mIoU and pixel accuracy answer different questions. Pixel accuracy reflects whether the dominant regions of the frame are classified correctly, whereas mIoU penalizes failures on minority classes much more strongly by averaging across classes. The diagnostic examples discussed above, where pixel accuracy exceeds 97\% while mIoU remains below 30\%, show that pixel accuracy alone can mask severe omissions of semantically important objects. Conversely, mIoU by itself does not distinguish whether errors arise from slight boundary shifts or complete class disappearance. A reliable assessment of Stage~1 therefore requires both metrics, together with per-class IoU, because only their combination exposes the class imbalance inherent in the current pipeline.
 
-GAN-based methods for driving video generation, such as SVS GAN~\cite{swerdlow2024svsgan}, offer an alternative paradigm. Key differences include:
-\begin{itemize}
-    \item \textbf{Training Stability:} Diffusion models exhibit more stable training compared to GANs, which suffer from mode collapse and require careful hyperparameter tuning.
-    \item \textbf{Sample Diversity:} Diffusion models naturally produce diverse samples through different noise initializations, while GANs may mode-collapse to a limited set of outputs.
-    \item \textbf{Inference Speed:} GANs generate samples in a single forward pass, while diffusion models require multiple denoising steps (30 in our case). This makes GANs significantly faster at inference time.
-    \item \textbf{Quality:} Recent diffusion models generally achieve better FID and FVD scores than GANs on complex datasets, consistent with the broader trend in generative modeling~\cite{dhariwal2021diffusion}.
-\end{itemize}
+A further implication is that future evaluations should separate endpoint-conditioned and interior-frame performance. Reporting full-sequence scores alone overestimates the ability of the model to forecast unseen intermediate semantics, because the conditioned endpoints are part of the evaluated clip. A more transparent protocol would report both full-sequence metrics and metrics on frames~1--23 only, alongside a strict frame-0-only evaluation without a final semantic anchor. Such a split would preserve comparability while making the true forecasting difficulty explicit.
+
+\FloatBarrier
+% -----------------------------------------------------------------
+\section{Implications for Future Stage~1 Design}
+\label{sec:stage1_future}
+
+Before architectural variants are compared, the evaluation protocol should distinguish pure frame-0-only forecasting from boundary-conditioned generation and should report interior-frame performance separately. This clarification is necessary to ensure that any subsequent improvement can be attributed to better forecasting rather than stronger endpoint guidance. Once the protocol is fixed, the most justified immediate architecture change is to replace single-shot concatenative conditioning with a semantic-specific pathway that re-injects semantic information at multiple spatial resolutions. This would reduce the burden on the first latent layer to preserve all class detail throughout the denoising hierarchy and would better protect small structures whose identity is currently lost early.
+
+Semantic-specific latent normalization should accompany this change. The current latent statistics indicate that the semantic representation does not share the variance regime of the RGB latent space for which the backbone was pretrained. Calibrating the semantic latents before diffusion would make optimization more consistent with the inherited noise schedule and would remove an avoidable source of training friction. Together, multi-scale semantic conditioning and semantic-specific latent normalization directly target the failure modes that are evidenced by the present evaluation.
+
+Additional modalities are also necessary if the goal is accurate future semantic prediction rather than semantic persistence. Multiple RGB frames would provide short-term motion evidence, ego-motion or pose information would explain large background displacements, and dense geometric cues such as depth or optical flow would help the model reason about occlusions and small moving agents. These signals are more informative for Stage~1 than increasing model size alone, because they supply the missing information required to predict future class arrangements. Without such modalities, the network remains forced to extrapolate dynamic scene evolution from a single static observation.
+
+Larger architectural changes should therefore be treated as a second step, not the first. A higher-resolution or hierarchical semantic latent representation would likely improve boundary preservation, and a more flexible denoiser could then exploit the richer representation more effectively. However, if stale first-frame conditioning, limited motion cues, and latent miscalibration remain unresolved, a larger backbone will inherit the same forecasting ambiguity. The central lesson from the current Stage~1 analysis is that better semantic prediction requires better information flow, not only more parameters.
 
 \FloatBarrier
 % -----------------------------------------------------------------
 \section{Conclusion}
 \label{sec:conclusion}
 
-This chapter has analyzed the experimental results, revealing that:
+This chapter has analyzed the current Stage~1 pipeline, revealing that:
 
 \begin{enumerate}
     \item The Semantic-Native VAE achieves 89.7\% mIoU through the combination of bypassing the RGB bottleneck, boundary-weighted loss, and Dice loss---each addressing a distinct failure mode of naive approaches.
     
-    \item The two-stage diffusion pipeline achieves FID (68.47) and FVD (595.52) scores indicating realistic frame-level appearance quality and moderate temporal consistency, with semantic fidelity metrics (mIoU 45.60\%, pixel accuracy 89.19\%) confirming that semantic maps provide an effective dense control signal for video generation.
+    \item The current Stage~1 diffusion model preserves coarse scene topology but does not yet provide balanced future semantic forecasting. On 487 KITTI-360 validation clips, the diagnostic analysis yields 35.45\% mIoU and 80.13\% pixel accuracy, confirming that dominant classes are learned more reliably than thin, rare, or highly dynamic classes.
     
-    \item Training instabilities related to gradient flow, semantic ID remapping, and memory management were identified and resolved, providing practical insights for future work.
+    \item The main bottlenecks are architectural rather than purely optimization-related. Repeated first-frame semantic anchoring, aggressive latent compression, semantic latent miscalibration, and missing motion cues together bias the model toward semantic persistence instead of accurate future structure prediction.
     
-    \item Standard evaluation metrics (FID, FVD) have domain-specific limitations when applied to driving video generation, suggesting that task-specific metrics (e.g., downstream perception performance) may better capture generation quality.
+    \item The most justified next updates are protocol clarification, semantic-specific latent normalization, multi-scale semantic conditioning, and richer motion-aware conditioning. Larger denoisers or backbone replacements should be considered only after these information-flow limitations are addressed.
 \end{enumerate}
