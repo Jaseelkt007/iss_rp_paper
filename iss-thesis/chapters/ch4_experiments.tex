@@ -450,6 +450,32 @@ Moderately covered classes present intermediate results. Terrain (59.06\%) and s
 
 Rare and small-scale classes remain the primary limitation. Rider (9.88\%), bus (7.34\%), motorcycle (5.17\%), bicycle (3.15\%), and train (0.32\%) are severely constrained by class rarity and limited spatial extent in the latent space. Traffic light achieves 0.00\% IoU, occupying fewer than 341 ground-truth pixels across the entire evaluation set — effectively below the latent-space resolution threshold. These limitations are consistent with the Stage~1 analysis and point to a shared bottleneck: fine-grained class generation requires higher latent resolution than the current $24 \times 88$ provides.
 
+\subsection{Comparison with Reference Methods}
+\label{subsec:stage2_reference_comparison}
+
+Table~\ref{tab:stage2_reference_comparison} situates the present Stage~2 results with respect to two relevant reference methods: SVS-GAN~\cite{seyam2024svsgan}, which is the closest semantic-map-conditioned baseline reported on KITTI-360, and Ctrl-V~\cite{luo2025ctrlv}, which is the methodological predecessor of this thesis but uses bounding-box control and reports results on KITTI rather than KITTI-360. The comparison must therefore be interpreted cautiously. The methods differ in conditioning modality, architecture, spatial resolution, dataset, and evaluation protocol. In particular, our Stage~2 is evaluated under ground-truth semantic conditioning, so the teacher-forced Box2Video setting of Ctrl-V is the closest analogue within that framework because both assume access to a known control sequence for all generated frames.
+
+\begin{table}[t]
+    \centering
+    \caption{Approximate Stage~2 comparison against reference methods. External results are taken from the respective papers and are not strictly comparable because dataset, control modality, spatial resolution, and evaluation protocols differ. The Ctrl-V row uses the teacher-forced Box2Video setting as the closest analogue to the present Stage~2.}
+    \label{tab:stage2_reference_comparison}
+    \resizebox{\textwidth}{!}{%
+    \begin{tabular}{llcccccc}
+        \toprule
+        \textbf{Method} & \textbf{Dataset / Control} & \textbf{FID $\downarrow$} & \textbf{FVD $\downarrow$} & \textbf{mIoU $\uparrow$} & \textbf{LPIPS $\downarrow$} & \textbf{SSIM $\uparrow$} & \textbf{PSNR $\uparrow$} \\
+        \midrule
+        SVS-GAN~\cite{seyam2024svsgan} & KITTI-360 / Semantic maps & 19.63 & 1103.69 & 45.08\% & -- & -- & -- \\
+        Ctrl-V (teacher-forced Box2Video)~\cite{luo2025ctrlv} & KITTI / Bounding boxes & -- & 435.6 & -- & 0.2963 & 0.4394 & 14.10 \\
+        Ours (UNet unfreeze) & KITTI-360 / Semantic maps & 21.9122 & 255.2064 & 39.17\% & 0.3569 & 0.4426 & 14.6185 \\
+        Ours (+ reinjection) & KITTI-360 / Semantic maps & 20.9585 & 234.3064 & 35.62\% & 0.3744 & 0.4140 & 13.8176 \\
+        \bottomrule
+    \end{tabular}}
+\end{table}
+
+The comparison highlights two complementary observations. Relative to SVS-GAN, the present diffusion-based Stage~2 remains weaker in semantic alignment on KITTI-360, as reflected by the lower mIoU and slightly higher FID. However, the substantially lower reported FVD suggests that the pretrained SVD backbone provides a different advantage in video-level realism or temporal smoothness under the reported evaluation setting. The comparison therefore indicates that autoregressive GAN synthesis remains a strong reference for strict semantic adherence, while diffusion-based synthesis offers a distinct trade-off in favour of temporal realism.
+
+The comparison with Ctrl-V should be interpreted differently. Ctrl-V is not a dense semantic baseline, but a parent framework using sparse bounding-box control. Its teacher-forced Box2Video results show that object-centric control can achieve strong frame-wise fidelity with a relatively compact conditioning signal. By contrast, the present Stage~2 must translate dense semantic structure across the full image, including background layout and thin classes. The comparison therefore supports the central research claim of this thesis: replacing sparse control with dense semantic conditioning increases scene-level specificity, but it also substantially increases the burden on the renderer to preserve fine-grained structure across all pixels.
+
 \subsection{Confusion Matrix Analysis}
 \label{subsec:confusion_matrix}
 
