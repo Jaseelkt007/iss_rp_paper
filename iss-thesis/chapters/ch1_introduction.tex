@@ -7,57 +7,61 @@
 \section{Motivation}
 \label{sec:motivation}
 
-The development and validation of autonomous driving systems requires vast quantities of diverse and accurately annotated video data. Real-world data collection is expensive, time-consuming, and inherently limited in its ability to capture rare but safety-critical scenarios such as pedestrian crossings, adverse weather conditions, and unusual traffic configurations. Synthetic data generation has therefore emerged as a complementary strategy that can provide virtually unlimited, perfectly labeled training data for perception, planning, and prediction modules in self-driving stacks~\cite{li2023drivingdiffusion, hu2023gaia}.
+This section motivates the thesis problem and places it within controllable video generation for autonomous driving.
 
-Traditional approaches to synthetic driving data rely on game engines or dedicated simulation platforms. While these methods provide high controllability, they suffer from a persistent \emph{domain gap} between rendered and real imagery. Recent advances in generative modeling---particularly diffusion-based methods~\cite{ho2020denoising, rombach2022highresolution}---have opened a promising alternative: learning the distribution of real driving videos directly from data and then sampling new, photorealistic sequences from the learned model.
+Autonomous driving systems require large volumes of diverse and accurately annotated video data for training and validation. Real-world data collection is expensive, time-consuming, and inherently limited in its coverage of rare but safety-critical situations. Synthetic data generation therefore remains an important complement to real data, especially for scenarios that are difficult to observe frequently in natural traffic~\cite{li2023drivingdiffusion,hu2023gaia}.
 
-A key challenge in this paradigm is \emph{controllability}. Unconditional or text-conditioned video diffusion models can produce visually plausible driving clips, but they offer no mechanism to specify the precise layout of the scene, the trajectories of vehicles, or the spatial arrangement of static elements such as roads, buildings, and vegetation. For autonomous driving applications, the ability to prescribe the semantic layout of every frame is essential---it allows researchers to systematically vary scene composition, test edge cases, and generate ground-truth annotations automatically.
+Conventional simulation pipelines provide explicit control over scene content, but they often produce imagery whose appearance differs noticeably from real-world driving video. This domain gap limits their usefulness for perception models that must generalise to real sensor data. Recent generative models, and latent diffusion models in particular, offer a data-driven alternative by learning to synthesise realistic imagery directly from recorded data rather than from hand-crafted rendering pipelines~\cite{ho2020denoising,rombach2022highresolution,blattmann2023stable}. For autonomous driving, however, realism alone is insufficient. The generated video must also remain controllable.
 
-Semantic segmentation maps provide a natural control signal for this purpose. A semantic map assigns each pixel a class label (e.g., road, car, building, sky), thereby offering a dense, interpretable, and spatially precise description of the scene. If a generative model can faithfully translate a sequence of semantic maps into a photorealistic video, then full control over the generated scene is achieved simply by specifying or predicting the semantic maps.
+The central challenge is therefore the design of a control interface that is both expressive and compatible with pretrained video diffusion models. Sparse controls such as text prompts or bounding boxes can guide selected aspects of a scene, but they do not specify full road layout, background structure, or per-pixel class identity. This limitation is particularly important in driving scenes, where evaluation often requires explicit control over roads, sidewalks, vehicles, buildings, vegetation, and other elements. Ctrl-V~\cite{luo2025ctrlv} demonstrates that structured control is feasible with bounding boxes, while SVS-GAN~\cite{seyam2024svsgan} shows that dense semantic conditioning is viable in an autoregressive GAN setting. The open question addressed in this thesis is whether dense semantic control can be studied effectively within a pretrained latent diffusion pipeline for autonomous driving video generation.
 
-This thesis addresses exactly this problem: \emph{how to generate controllable, high-fidelity driving videos conditioned on semantic segmentation maps, using latent video diffusion models.}
+Semantic segmentation maps are a natural candidate for this role because they assign a class label to every pixel and therefore specify the full scene layout in an interpretable form. However, this control modality also introduces a technical mismatch. Semantic maps are discrete annotation structures, whereas pretrained latent diffusion backbones expect continuous RGB-like latent representations. This thesis addresses that mismatch through a Semantic Variational Autoencoder (Semantic VAE) and investigates dense semantic controllability in a two-stage diffusion framework adapted from Ctrl-V. The resulting research problem is not only whether photorealistic video can be generated from semantic maps, but also how much semantic structure can be preserved through prediction and rendering.
 
 \section{Research Objectives}
 \label{sec:objectives}
 
-The primary objective of this work is to design, implement, and evaluate a two-stage pipeline for semantically controlled video generation in the autonomous driving domain. The specific research objectives are:
+This section defines the scope of the thesis and the research questions that guide it.
+
+The thesis is driven by two linked questions. First, can dense semantic segmentation maps be represented in a latent space that is compatible with a pretrained video diffusion backbone? Second, to what extent can such maps provide a practical and interpretable control interface for autonomous driving video generation? To answer these questions, the thesis pursues the following objectives:
 
 \begin{enumerate}
-    \item \textbf{Semantic VAE Design:} Develop a Variational Autoencoder (VAE) capable of encoding discrete semantic segmentation maps into the continuous latent space of a pretrained video diffusion model, while preserving class boundaries and semantic fidelity.
+    \item Design a semantic latent interface that maps discrete semantic segmentation maps into a continuous representation suitable for a pretrained latent diffusion model, while preserving class structure and boundaries.
     
-    \item \textbf{Stage~1 --- Semantic Video Prediction:} Train a diffusion model that, given an initial RGB frame, predicts future semantic segmentation video sequences.
+    \item Investigate dense semantic control in a two-stage latent diffusion framework, where Stage~1 predicts future semantic segmentation sequences and Stage~2 translates semantic map sequences into photorealistic RGB video.
     
-    \item \textbf{Stage~2 --- Semantic-to-Video Generation:} Train a ControlNet-conditioned video diffusion model that generates photorealistic RGB driving videos guided by the semantic maps produced in Stage~1.
-    
-    \item \textbf{Evaluation:} Quantitatively assess the pipeline using standard metrics including Fr\'echet Inception Distance (FID), Fr\'echet Video Distance (FVD), and Mean Intersection-over-Union (mIoU), and compare with related approaches.
+    \item Evaluate the resulting system on KITTI-360 with respect to semantic reconstruction, semantic prediction, semantic consistency of generated RGB frames, perceptual quality, and comparison with relevant reference methods.
 \end{enumerate}
+
+Together, these objectives frame the thesis as a study of controllability rather than solely as an attempt to maximise perceptual generation scores. The aim is to understand both the feasibility and the limitations of dense semantic control in latent video diffusion.
 
 \section{Contributions}
 \label{sec:contributions}
 
-The main contributions of this thesis are:
+This section summarises the principal contributions of the thesis.
+
+The main contributions of this thesis are as follows:
 
 \begin{itemize}
-    \item A \textbf{Semantic-Native VAE} architecture that bypasses the RGB bottleneck of pretrained image VAEs by introducing trainable semantic stem and head modules around a frozen Stable Video Diffusion VAE core. The proposed model achieves 89.7\% mIoU on KITTI-360 validation data with only $\sim$200K trainable parameters.
+    \item A \textbf{Semantic Variational Autoencoder} that bridges the mismatch between discrete semantic labels and the continuous latent space of a pretrained Stable Video Diffusion backbone. The design replaces the restrictive RGB bottleneck with a semantic-native latent interface and is trained with objectives tailored to boundary preservation and class imbalance.
     
-    \item A \textbf{boundary-weighted cross-entropy loss} combined with a \textbf{Dice loss} for training the Semantic VAE, which addresses the critical problem of boundary degradation and class imbalance in semantic reconstruction.
+    \item An \textbf{adaptation of the Ctrl-V framework from sparse to dense control}, in which bounding-box conditioning is replaced by semantic segmentation maps. This enables the study of dense semantic controllability within a pretrained latent diffusion pipeline while retaining the modular two-stage decomposition of semantic prediction and RGB video generation.
     
-    \item A complete \textbf{two-stage diffusion pipeline} for semantically controlled video generation, adapted from the Ctrl-V framework~\cite{luo2025ctrlv}, where bounding-box conditioning is replaced by dense semantic map conditioning.
+    \item A \textbf{systematic empirical study of dense semantic control on KITTI-360}, covering semantic reconstruction, semantic video prediction, semantic-to-video generation, and architectural refinements. The experiments show that dense semantic conditioning is feasible and informative, but also reveal clear limitations in temporal reasoning, fine-grained boundary preservation, and rare-class fidelity.
     
-    \item A thorough \textbf{experimental evaluation} on the KITTI-360 dataset~\cite{liao2022kitti360}, including ablation studies on loss functions, architectural choices, and training configurations.
+    \item A \textbf{comparative analysis against relevant reference methods}, particularly Ctrl-V~\cite{luo2025ctrlv} and SVS-GAN~\cite{seyam2024svsgan}, which clarifies the scientific position of the thesis: the main contribution lies in investigating dense semantic control in latent diffusion, not in proposing the two-stage decomposition itself.
 \end{itemize}
 
 \section{Thesis Outline}
 \label{sec:outline}
 
-The remainder of this thesis is organized as follows:
+This section summarises the structure of the remainder of the thesis.
 
-\textbf{Chapter~\ref{ch:related_work} -- Related Work} reviews the theoretical foundations and prior art in diffusion models, variational autoencoders, video generation, and controllable synthesis. Mathematical formulations of the key concepts are provided.
+Chapter~\ref{ch:related_work} reviews the theoretical foundations and prior work in diffusion models, variational autoencoders, controllable video generation, and driving-specific generative modelling, and positions the thesis with respect to Ctrl-V and SVS-GAN.
 
-\textbf{Chapter~\ref{ch:methodology} -- Methodology} describes the dataset, evaluation metrics, the proposed Semantic VAE architecture, the two-stage diffusion pipeline, and the loss functions used for training.
+Chapter~\ref{ch:methodology} presents the dataset, evaluation protocols, the proposed Semantic VAE, and the two-stage latent diffusion framework used to study dense semantic control.
 
-\textbf{Chapter~\ref{ch:experiments} -- Experiments} presents the implementation details, hyperparameter configurations, quantitative results, ablation studies, and comparisons with baseline methods.
+Chapter~\ref{ch:experiments} reports the implementation settings, quantitative results, ablation studies, qualitative examples, and comparisons with reference methods on KITTI-360.
 
-\textbf{Chapter~\ref{ch:discussion} -- Discussion} analyzes the experimental results, discusses training instabilities, limitations of evaluation metrics, and compares the proposed approach with related work.
+Chapter~\ref{ch:discussion} interprets the results, analyses the architectural limitations of the two-stage system, and discusses what the experiments imply for controllability in autonomous driving video generation.
 
-\textbf{Chapter~\ref{ch:summary} -- Summary} concludes the thesis and outlines directions for future work.
+Chapter~\ref{ch:summary} concludes the thesis by summarising the main findings and outlining the most important directions for future work.
