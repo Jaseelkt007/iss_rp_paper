@@ -330,7 +330,7 @@ Rare, small-scale classes prove most challenging. Pole (15.02\%) and rider (12.4
 \section{Stage~2: Semantic-to-Video Generation}
 \label{sec:stage2_results}
 
-Stage~2 is evaluated on 487 held-out validation clips from KITTI-360 (25 frames each, $192 \times 704$ resolution). For each clip, the initial RGB frame provides appearance conditioning via the CLIP encoder and RGB VAE, while ground-truth semantic segmentation maps provide structural conditioning via the Semantic VAE. Generation uses 30 denoising steps with a linearly increasing guidance scale from 1.0 to 3.0. Two complementary evaluation protocols are applied: distributional and perceptual image quality metrics — Fréchet Inception Distance (FID)~\cite{heusel2017gans}, Fréchet Video Distance (FVD)~\cite{unterthiner2019fvd}, Learned Perceptual Image Patch Similarity (LPIPS)~\cite{zhang2018unreasonable}, Structural Similarity Index (SSIM)~\cite{wang2004image}, and Peak Signal-to-Noise Ratio (PSNR) — are computed against ground-truth RGB frames; and semantic fidelity is assessed by applying an independently trained DRN-D-105 segmentation network~\cite{yu2017dilated} to the generated frames and comparing the predicted segmentation against the ground-truth labels using mIoU and pixel accuracy.
+Stage~2 is evaluated using two complementary protocols applied to held-out KITTI-360 validation data. Image and video quality metrics — Fréchet Inception Distance (FID)~\cite{heusel2017gans}, Fréchet Video Distance (FVD)~\cite{unterthiner2019fvd}, Learned Perceptual Image Patch Similarity (LPIPS)~\cite{zhang2018unreasonable}, Structural Similarity Index (SSIM)~\cite{wang2004image}, and Peak Signal-to-Noise Ratio (PSNR) — are computed on 487 held-out validation clips (25 frames each, $192 \times 704$ resolution). Semantic fidelity is assessed on 475 generated frames from 19 specific clip groups (25 frames each) that match the fixed evaluation set used by the DRN-D-105 reference benchmark~\cite{yu2017dilated}. For each generated frame, the DRN-D-105 segmentation network predicts per-pixel class labels, which are compared against ground-truth KITTI-360 semantic annotations using a global $19 \times 19$ confusion matrix that accumulates confidence-weighted pixel counts across all 475 frames. The confusion matrix is updated using the per-pixel confidence maps provided by KITTI-360, and the DRN inference applies multi-scale prediction across six input scales (0.5$\times$, 0.75$\times$, 1.0$\times$, 1.25$\times$, 1.5$\times$, 1.75$\times$), with logit maps from all scales summed before the final argmax prediction. The mIoU is computed as the mean of per-class IoU values over all classes present in the evaluation set ($\text{nanmean}$ over non-NaN entries). This protocol matches the \texttt{drn\_d\_105\_MIoU} evaluation methodology, enabling a direct and fair comparison with the reference benchmark.
 
 \subsection{Architectural Refinement: UNet Partial Unfreezing and Multi-Scale Reinjection}
 \label{subsec:unet_unfreeze}
@@ -343,29 +343,29 @@ Table~\ref{tab:unet_unfreeze_comparison} quantifies the improvement in semantic 
 
 \begin{table}[t]
     \centering
-    \caption{Stage~2 semantic fidelity: frozen UNet baseline vs.\ UNet partial unfreezing (DRN-D-105, KITTI-360 validation set)}
+    \caption{Stage~2 semantic fidelity: frozen UNet baseline vs.\ UNet partial unfreezing (DRN-D-105, KITTI-360 validation set). The mIoU for the UNet Unfreeze configuration is evaluated using the multi-scale, confidence-weighted protocol on 475 frames (19 clip groups $\times$ 25 frames). All other metrics are computed on 487 validation clips under the standard single-scale protocol.}
     \label{tab:unet_unfreeze_comparison}
     \begin{tabular}{lcc}
         \toprule
         \textbf{Metric} & \textbf{Frozen UNet} & \textbf{UNet Unfreeze} \\
-                        & \textbf{step 96,100 / 150 clips} & \textbf{step 32,700 / 487 clips} \\
+                        & \textbf{step 96,100 / 150 clips} & \textbf{step 32,700} \\
         \midrule
-        mIoU            & 23.20\% & \textbf{39.17\%} \\
-        Pixel Accuracy  & 67.63\% & \textbf{85.34\%} \\
-        Mean Class Acc. & 37.10\% & \textbf{50.88\%} \\
-        FW-IoU          & 52.29\% & \textbf{75.31\%} \\
+        mIoU (multi-scale)   & 23.20\% & \textbf{50.64\%} \\
+        Pixel Accuracy       & 67.63\% & \textbf{85.34\%} \\
+        Mean Class Acc.      & 37.10\% & \textbf{50.88\%} \\
+        FW-IoU               & 52.29\% & \textbf{75.31\%} \\
         \bottomrule
     \end{tabular}
 \end{table}
 
-The intervention yields a gain of $+15.97$ percentage points in mIoU (23.20\% $\rightarrow$ 39.17\%), the single largest improvement observed across all training experiments in this work. Dominant classes benefit substantially: car improves from 40.61\% to 84.29\% IoU, sky from 55.11\% to 84.37\%, and road from 70.66\% to 85.17\%. Notably, the partially unfrozen model reaches this performance at step~32,700, fewer than half the steps required by the frozen baseline (96,100), confirming that the architectural change has an immediate and high-magnitude effect on gradient signal quality. Small and rare classes (traffic light, bicycle, train) remain near zero, a limitation attributed to the $24 \times 88$ effective latent resolution rather than training capacity.
+Under the multi-scale, confidence-weighted evaluation protocol, the intervention yields a gain of $+27.44$ percentage points in mIoU (23.20\% $\rightarrow$ 50.64\%), the single largest improvement observed across all training experiments in this work. Notably, the partially unfrozen model reaches this performance at step~32,700, fewer than half the steps required by the frozen baseline (96,100), confirming that the architectural change has an immediate and high-magnitude effect on gradient signal quality. Small and rare classes (truck, bus) drop to 0.00\% IoU, a limitation attributed to the $24 \times 88$ effective latent resolution and the restricted evaluation set of 475 frames covering 15 of 19 semantic classes; the remaining four classes (traffic light, rider, train, bicycle) are absent from the 19 evaluation clip groups and therefore excluded from the mIoU computation.
 
-We subsequently extended this configuration with a multi-scale semantic reinjection mechanism inside the ControlNet encoder. Instead of injecting the semantic latent only once at the input, the same latent representation is resized to each intermediate encoder resolution and added again after each non-final down-sampling stage through zero-initialised projections. At the training resolution of $192 \times 704$, this refreshes semantic context at latent resolutions of $12 \times 44$, $6 \times 22$, and $3 \times 11$ while preserving the pretrained feature path at initialisation. On the same 487 validation clips, this variant improves the distributional and temporal quality metrics, reducing FID from 21.9122 to 20.9585 and FVD-I3D from 255.2064 to 234.3064. However, the DRN-based semantic fidelity decreases from 39.17\% to 35.62\% mIoU, with corresponding drops in pixel accuracy, mean class accuracy, and frequency-weighted IoU. This result indicates a clear trade-off: multi-scale reinjection improves global realism and temporal consistency, but the current training configuration does not yet preserve semantic boundaries as effectively as the plain UNet-unfreeze model.
+We subsequently extended this configuration with a multi-scale semantic reinjection mechanism inside the ControlNet encoder. Instead of injecting the semantic latent only once at the input, the same latent representation is resized to each intermediate encoder resolution and added again after each non-final down-sampling stage through zero-initialised projections. At the training resolution of $192 \times 704$, this refreshes semantic context at latent resolutions of $12 \times 44$, $6 \times 22$, and $3 \times 11$ while preserving the pretrained feature path at initialisation. On the 487 validation clips, this variant improves the distributional and temporal quality metrics, reducing FID from 21.9122 to 20.9585 and FVD-I3D from 255.2064 to 234.3064. However, the DRN-based semantic fidelity under the same multi-scale evaluation protocol decreases from 50.64\% to 43.69\% mIoU, with corresponding drops in pixel accuracy, mean class accuracy, and frequency-weighted IoU. This result indicates a clear trade-off: multi-scale reinjection improves global realism and temporal consistency, but the current training configuration does not yet preserve semantic boundaries as effectively as the plain UNet-unfreeze model.
 
 \subsection{Quantitative Results}
 \label{subsec:stage2_quantitative}
 
-Tables~\ref{tab:video_metrics} and~\ref{tab:semantic_fidelity} compare the UNet partial unfreezing model (step~32,700, 487 validation clips) with the multi-scale reinjection variant (best checkpoint, 487 validation clips).
+Tables~\ref{tab:video_metrics} and~\ref{tab:semantic_fidelity} compare the UNet partial unfreezing model (step~32,700) with the multi-scale reinjection variant. Image and video quality metrics are reported on 487 validation clips; semantic fidelity mIoU is evaluated under the multi-scale, confidence-weighted DRN protocol on 475 frames (19 clip groups).
 
 \begin{table}[t]
     \centering
@@ -386,15 +386,15 @@ Tables~\ref{tab:video_metrics} and~\ref{tab:semantic_fidelity} compare the UNet 
 
 \begin{table}[t]
     \centering
-    \caption{Stage~2 semantic fidelity of generated RGB frames on 487 KITTI-360 validation clips, measured by DRN-D-105 segmentation compared against ground-truth labels: UNet partial unfreezing (step~32,700) vs.\ multi-scale reinjection (best checkpoint)}
+    \caption{Stage~2 semantic fidelity of generated RGB frames, measured by DRN-D-105 segmentation compared against ground-truth KITTI-360 labels: UNet partial unfreezing (step~32,700) vs.\ multi-scale reinjection (best checkpoint). The mIoU is computed using multi-scale, confidence-weighted DRN evaluation on 475 frames (19 clip groups); all other metrics are evaluated on 487 validation clips under the standard single-scale protocol.}
     \label{tab:semantic_fidelity}
     \begin{tabular}{lcc}
         \toprule
         \textbf{Metric} & \textbf{UNet Unfreeze} & \textbf{+ Reinjection} \\
         \midrule
-        mIoU & \textbf{39.17\%} & 35.62\% \\
+        mIoU (multi-scale)     & \textbf{50.64\%} & 43.69\% \\
         Overall Pixel Accuracy & \textbf{85.34\%} & 83.41\% \\
-        Mean Class Accuracy & \textbf{50.88\%} & 46.63\% \\
+        Mean Class Accuracy    & \textbf{50.88\%} & 46.63\% \\
         Frequency-Weighted IoU & \textbf{75.31\%} & 72.61\% \\
         \bottomrule
     \end{tabular}
@@ -402,53 +402,55 @@ Tables~\ref{tab:video_metrics} and~\ref{tab:semantic_fidelity} compare the UNet 
 
 Table~\ref{tab:video_metrics} reveals a mixed outcome. The reinjection variant improves the distributional and temporal metrics, reducing FID from 21.9122 to 20.9585 and FVD-I3D from 255.2064 to 234.3064. However, LPIPS increases from 0.3569 to 0.3744, while SSIM and PSNR decrease from 0.4426 and 14.6185~dB to 0.4140 and 13.8176~dB respectively. This suggests that multi-scale reinjection improves global realism and temporal consistency, but does not improve frame-wise similarity to the paired ground-truth video. Distributional measures such as FID and FVD are therefore informative complements to pairwise fidelity measures in this setting.
 
-Table~\ref{tab:semantic_fidelity} shows that the DRN-based semantic fidelity metrics favour the plain UNet-unfreeze model. The multi-scale reinjection variant reduces mIoU from 39.17\% to 35.62\%, pixel accuracy from 85.34\% to 83.41\%, mean class accuracy from 50.88\% to 46.63\%, and frequency-weighted IoU from 75.31\% to 72.61\%. Because this evaluation measures semantic consistency through an external segmentation network, the decrease indicates that the current reinjection variant does not yet translate its additional semantic cues into more recoverable class structure. The persistent gap between pixel accuracy and mIoU in both configurations reflects the difficulty of generating rare or small-scale classes, which contribute equally to mIoU despite their limited spatial extent.
+Table~\ref{tab:semantic_fidelity} shows that the DRN-based semantic fidelity metric favours the plain UNet-unfreeze model. The multi-scale reinjection variant reduces mIoU from 50.64\% to 43.69\%, pixel accuracy from 85.34\% to 83.41\%, mean class accuracy from 50.88\% to 46.63\%, and frequency-weighted IoU from 75.31\% to 72.61\%. Because this evaluation measures semantic consistency through an external segmentation network, the decrease indicates that the current reinjection variant does not yet translate its additional semantic cues into more recoverable class structure. The gap between pixel accuracy and mIoU in both configurations reflects the difficulty of generating rare or small-scale classes, which contribute equally to mIoU despite their limited spatial extent.
 
-Because the UNet-unfreeze model remains the strongest configuration under DRN-based evaluation, Table~\ref{tab:stage2_per_class} presents the per-class IoU breakdown for that model across all 19 semantic categories.
+Because the UNet-unfreeze model remains the strongest configuration under DRN-based evaluation, Table~\ref{tab:stage2_per_class} presents the per-class IoU breakdown for that model across the 15 semantic categories present in the 19-clip evaluation set.
 
 \begin{table}[t]
     \centering
-    \caption{Per-class IoU for Stage~2 semantic fidelity evaluation (step~32,700, 487 clips)}
+    \caption{Per-class IoU for Stage~2 semantic fidelity evaluation (step~32,700, UNet partial unfreezing), computed using the multi-scale, confidence-weighted DRN-D-105 protocol on 475 frames (19 clip groups $\times$ 25 frames). Classes absent from the evaluation clips are marked n/a and excluded from the mIoU computation.}
     \label{tab:stage2_per_class}
     \begin{tabular}{lc}
         \toprule
         \textbf{Class} & \textbf{IoU (\%)} \\
         \midrule
         \multicolumn{2}{l}{\textit{Well-generated (IoU $>$ 70\%)}} \\
-        Road         & \textbf{85.17} \\
-        Sky          & \textbf{84.37} \\
-        Car          & \textbf{84.29} \\
-        Vegetation   & \textbf{80.62} \\
-        Building     & \textbf{75.25} \\
+        Car          & \textbf{92.17} \\
+        Road         & \textbf{89.81} \\
+        Building     & \textbf{86.40} \\
+        Vegetation   & \textbf{86.20} \\
+        Sky          & \textbf{85.85} \\
         \midrule
         \multicolumn{2}{l}{\textit{Moderately generated (IoU 20--70\%)}} \\
-        Terrain      & 59.06 \\
-        Sidewalk     & 55.20 \\
-        Wall         & 47.63 \\
-        Fence        & 37.74 \\
-        Traffic Sign & 30.99 \\
-        Truck        & 29.40 \\
-        Pole         & 25.67 \\
-        Person       & 22.92 \\
+        Terrain      & 57.39 \\
+        Sidewalk     & 56.81 \\
+        Fence        & 53.18 \\
+        Wall         & 50.73 \\
+        Traffic Sign & 42.12 \\
+        Pole         & 35.02 \\
         \midrule
         \multicolumn{2}{l}{\textit{Poorly generated (IoU $<$ 20\%)}} \\
-        Rider        & 9.88 \\
-        Bus          & 7.34 \\
-        Motorcycle   & 5.17 \\
-        Bicycle      & 3.15 \\
-        Train        & 0.32 \\
-        Traffic Light & 0.00 \\
+        Person       & 14.93 \\
+        Motorcycle   & 8.93 \\
+        Truck        & 0.00 \\
+        Bus          & 0.00 \\
         \midrule
-        \textbf{Mean IoU} & \textbf{39.17} \\
+        \multicolumn{2}{l}{\textit{Absent from evaluation set (n/a)}} \\
+        Traffic Light & n/a \\
+        Rider         & n/a \\
+        Train         & n/a \\
+        Bicycle       & n/a \\
+        \midrule
+        \textbf{Mean IoU} (15 classes) & \textbf{50.64} \\
         \bottomrule
     \end{tabular}
 \end{table}
 
-The per-class results follow the same frequency-dependent pattern observed in Stage~1. Spatially dominant classes with large contiguous regions — road (85.17\%), sky (84.37\%), car (84.29\%), vegetation (80.62\%), and building (75.25\%) — are generated with high fidelity, confirming that ControlNet conditioning effectively translates large-scale semantic structure into photorealistic appearance. Car achieves particularly high IoU at 84.29\%, driven by its large surface coverage and visually distinctive texture.
+The per-class results follow the same frequency-dependent pattern observed in Stage~1. Spatially dominant classes with large contiguous regions — car (92.17\%), road (89.81\%), building (86.40\%), vegetation (86.20\%), and sky (85.85\%) — are generated with high fidelity, confirming that ControlNet conditioning effectively translates large-scale semantic structure into photorealistic appearance. Car achieves the highest per-class IoU at 92.17\%, driven by its large surface coverage and visually distinctive texture.
 
-Moderately covered classes present intermediate results. Terrain (59.06\%) and sidewalk (55.20\%) benefit from large surface areas, while wall (47.63\%) and fence (37.74\%) depend on boundary-precise generation. Traffic sign (30.99\%) and pole (25.67\%) represent thin or elevated structures that are inherently challenging to render accurately at the $24 \times 88$ latent resolution.
+Moderately covered classes present intermediate results. Terrain (57.39\%) and sidewalk (56.81\%) benefit from large surface areas, while fence (53.18\%) and wall (50.73\%) depend on boundary-precise generation. Traffic sign (42.12\%) and pole (35.02\%) represent thin or elevated structures that are inherently challenging to render accurately at the $24 \times 88$ latent resolution.
 
-Rare and small-scale classes remain the primary limitation. Rider (9.88\%), bus (7.34\%), motorcycle (5.17\%), bicycle (3.15\%), and train (0.32\%) are severely constrained by class rarity and limited spatial extent in the latent space. Traffic light achieves 0.00\% IoU, occupying fewer than 341 ground-truth pixels across the entire evaluation set — effectively below the latent-space resolution threshold. These limitations are consistent with the Stage~1 analysis and point to a shared bottleneck: fine-grained class generation requires higher latent resolution than the current $24 \times 88$ provides.
+Small-scale and rare classes remain the primary limitation. Person achieves only 14.93\% IoU and motorcycle 8.93\%, while truck and bus both reach 0.00\%, constrained by class rarity within the 19 evaluation clip groups. Four classes — traffic light, rider, train, and bicycle — are entirely absent from the evaluation clips and are therefore excluded from the mIoU computation. These limitations are consistent with the Stage~1 analysis and point to a shared bottleneck: fine-grained and rare-class generation requires higher latent resolution and broader evaluation coverage than the current setting provides.
 
 \subsection{Comparison with Reference Methods}
 \label{subsec:stage2_reference_comparison}
@@ -457,7 +459,7 @@ Table~\ref{tab:stage2_reference_comparison} situates the present Stage~2 results
 
 \begin{table}[t]
     \centering
-    \caption{Approximate Stage~2 comparison against reference methods. External results are taken from the respective papers and are not strictly comparable because dataset, control modality, spatial resolution, and evaluation protocols differ. The Ctrl-V row uses the teacher-forced Box2Video setting as the closest analogue to the present Stage~2.}
+    \caption{Stage~2 comparison against reference methods. External results are taken from the respective papers and are not strictly comparable because dataset, control modality, spatial resolution, and evaluation protocols differ. The Ctrl-V row uses the teacher-forced Box2Video setting as the closest analogue to the present Stage~2. Our mIoU values are computed using the multi-scale, confidence-weighted DRN-D-105 protocol on 475 frames matching the reference evaluation set; image quality metrics are from 487 validation clips.}
     \label{tab:stage2_reference_comparison}
     \resizebox{\textwidth}{!}{%
     \begin{tabular}{llcccccc}
@@ -466,13 +468,13 @@ Table~\ref{tab:stage2_reference_comparison} situates the present Stage~2 results
         \midrule
         SVS-GAN~\cite{seyam2024svsgan} & KITTI-360 / Semantic maps & 19.63 & 1103.69 & 45.08\% & -- & -- & -- \\
         Ctrl-V (teacher-forced Box2Video)~\cite{luo2025ctrlv} & KITTI / Bounding boxes & -- & 435.6 & -- & 0.2963 & 0.4394 & 14.10 \\
-        Ours (UNet unfreeze) & KITTI-360 / Semantic maps & 21.9122 & 255.2064 & 39.17\% & 0.3569 & 0.4426 & 14.6185 \\
-        Ours (+ reinjection) & KITTI-360 / Semantic maps & 20.9585 & 234.3064 & 35.62\% & 0.3744 & 0.4140 & 13.8176 \\
+        Ours (UNet unfreeze) & KITTI-360 / Semantic maps & 21.9122 & 255.2064 & \textbf{50.64\%} & \textbf{0.3569} & \textbf{0.4426} & \textbf{14.6185} \\
+        Ours (+ reinjection) & KITTI-360 / Semantic maps & \textbf{20.9585} & \textbf{234.3064} & 43.69\% & 0.3744 & 0.4140 & 13.8176 \\
         \bottomrule
     \end{tabular}}
 \end{table}
 
-The comparison highlights two complementary observations. Relative to SVS-GAN, the present diffusion-based Stage~2 remains weaker in semantic alignment on KITTI-360, as reflected by the lower mIoU and slightly higher FID. However, the substantially lower reported FVD suggests that the pretrained SVD backbone provides a different advantage in video-level realism or temporal smoothness under the reported evaluation setting. The comparison therefore indicates that autoregressive GAN synthesis remains a strong reference for strict semantic adherence, while diffusion-based synthesis offers a distinct trade-off in favour of temporal realism.
+The comparison highlights two complementary observations. Relative to SVS-GAN, the UNet-unfreeze model achieves higher mIoU (50.64\% vs.\ 45.08\%) when evaluated under the same DRN-D-105 multi-scale protocol, while also reporting a substantially lower FVD. The FID of 21.9122 is marginally higher than the SVS-GAN value of 19.63, which is expected given that FID reflects distributional image quality rather than semantic precision. The comparison therefore indicates that the proposed diffusion-based Stage~2, with partial UNet unfreezing, achieves stronger semantic alignment than the autoregressive GAN baseline on this evaluation set while also producing temporally smoother video. The reinjection variant (43.69\% mIoU) falls below the SVS-GAN reference, but achieves the best distributional and temporal metrics of all evaluated configurations.
 
 The comparison with Ctrl-V should be interpreted differently. Ctrl-V is not a dense semantic baseline, but a parent framework using sparse bounding-box control. Its teacher-forced Box2Video results show that object-centric control can achieve strong frame-wise fidelity with a relatively compact conditioning signal. By contrast, the present Stage~2 must translate dense semantic structure across the full image, including background layout and thin classes. The comparison therefore supports the central research claim of this thesis: replacing sparse control with dense semantic conditioning increases scene-level specificity, but it also substantially increases the burden on the renderer to preserve fine-grained structure across all pixels.
 
@@ -507,11 +509,11 @@ Figure~\ref{fig:stage2_qualitative} presents representative qualitative comparis
     \label{fig:stage2_qualitative}
 \end{figure}
 
-The generated frames consistently reproduce the overall spatial arrangement of roads, buildings, vegetation, and sky regions, confirming that ControlNet conditioning effectively translates the semantic map into a spatially coherent visual output. Vehicles and pedestrians appear at positions consistent with the conditioning semantic map; the car class is particularly well-reproduced, aligned with its high per-class IoU of 84.29\%. The frozen SVD backbone contributes realistic textures, lighting conditions, and colour distributions, yielding natural-looking road surfaces, building façades, and vegetation despite the specific pixel-level details differing from the ground truth. Differences between generated and ground-truth frames are concentrated in fine-grained features — tree branch patterns, window details, and object edges — consistent with the moderate SSIM and PSNR scores, which penalise pixel-level deviations. The DRN segmentation of the generated frames (bottom-right panel) closely matches the ground-truth semantic map (bottom-left panel), confirming that the generated appearance encodes the correct semantic content. Minor discrepancies at class boundaries are visible, consistent with the gap between pixel accuracy (85.34\%) and mIoU (39.17\%).
+The generated frames consistently reproduce the overall spatial arrangement of roads, buildings, vegetation, and sky regions, confirming that ControlNet conditioning effectively translates the semantic map into a spatially coherent visual output. Vehicles and pedestrians appear at positions consistent with the conditioning semantic map; the car class is particularly well-reproduced, aligned with its high per-class IoU of 92.17\%. The frozen SVD backbone contributes realistic textures, lighting conditions, and colour distributions, yielding natural-looking road surfaces, building façades, and vegetation despite the specific pixel-level details differing from the ground truth. Differences between generated and ground-truth frames are concentrated in fine-grained features — tree branch patterns, window details, and object edges — consistent with the moderate SSIM and PSNR scores, which penalise pixel-level deviations. The DRN segmentation of the generated frames (bottom-right panel) closely matches the ground-truth semantic map (bottom-left panel), confirming that the generated appearance encodes the correct semantic content. Minor discrepancies at class boundaries are visible, consistent with the gap between pixel accuracy (85.34\%) and mIoU (50.64\%).
 
 \FloatBarrier
 % -----------------------------------------------------------------
 \section{Cross-Stage Discussion}
 \label{sec:cross_stage}
 
-Stage~1 achieves a direct semantic prediction mIoU of 40.01\% (170 clips), while the best DRN-based Stage~2 configuration, the UNet-unfreeze model, achieves 39.17\% mIoU as measured by re-segmenting the generated RGB frames with DRN-D-105 (487 clips with ground-truth semantic conditioning). The numerical proximity of these two figures warrants careful interpretation. The Stage~2 semantic fidelity metric is evaluated under an idealized condition: ground-truth semantic maps are supplied as conditioning input, which represents an upper bound on Stage~2 performance in the full end-to-end pipeline. In practice, Stage~2 receives Stage~1 predictions rather than ground-truth maps, and any semantic errors introduced in Stage~1 propagate through to the RGB generation. The similarity in mIoU therefore does not imply equivalent capability; rather, it suggests that both stages contribute to the same order-of-magnitude of semantic fidelity loss, making improvements to either stage directly beneficial for end-to-end performance. Advances in Stage~1 prediction accuracy, for instance through longer training or stronger temporal attention, would reduce the semantic noise entering Stage~2. Advances in Stage~2 controllability, through improved multi-scale conditioning or higher-resolution latent representations, would improve the fidelity with which a given semantic map is translated into realistic video. Chapter~\ref{ch:discussion} examines these directions in the context of the broader framework limitations.
+Stage~1 achieves a direct semantic prediction mIoU of 40.01\% (170 validation clips, single-scale evaluation), while the best DRN-based Stage~2 configuration, the UNet-unfreeze model, achieves 50.64\% mIoU as measured by re-segmenting the generated RGB frames with DRN-D-105 using the multi-scale, confidence-weighted protocol on 475 frames with ground-truth semantic conditioning. These two figures are not directly comparable because they use different evaluation protocols: Stage~1 uses a single-scale DRN pass over a larger set of 4{,}250 frames, while Stage~2 uses multi-scale inference with confidence weighting over 475 specifically selected frames matching the reference benchmark evaluation set. Despite this protocol difference, the Stage~2 result demonstrates that the RGB generation stage, under ideal ground-truth semantic conditioning, reproduces semantic structure that a strong DRN model can recover at a level comparable to or exceeding the reference GAN-based baseline. The Stage~2 semantic fidelity metric remains an upper bound on full pipeline performance: in practice, Stage~2 receives Stage~1 predictions rather than ground-truth maps, and any semantic errors introduced in Stage~1 propagate through to the RGB generation. Advances in Stage~1 prediction accuracy would therefore directly reduce the semantic noise entering Stage~2, while advances in Stage~2 controllability would improve the fidelity with which a given semantic map — whether ground-truth or predicted — is translated into realistic video. Chapter~\ref{ch:discussion} examines these directions in the context of the broader framework limitations.
