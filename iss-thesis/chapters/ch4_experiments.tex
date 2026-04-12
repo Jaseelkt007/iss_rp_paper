@@ -256,6 +256,45 @@ Spatially dominant classes — road, building, vegetation, car — maintain abov
 
 Rare dynamic classes (person, rider, motorcycle, bicycle) show the largest relative gains in Phase~2b. Person improves from 15\% to 75.0\% and rider from 10\% to 60.0\%, driven by the Dice loss reducing the gradient dominance of large background classes. These results validate the choice of combining boundary-weighted cross-entropy with Dice loss as the training objective for the final Semantic VAE.
 
+\subsection{Qualitative Evaluation}
+\label{subsec:vae_qualitative}
+
+To complement the development results, a unified comparative evaluation was conducted across the three configurations on a fixed set of 100 KITTI-360 validation samples. Figure~\ref{fig:vae_summary_bar} summarises the mIoU and pixel accuracy obtained from this 100-sample benchmark, and Figure~\ref{fig:vae_per_class_iou} provides the full per-class breakdown. These figures serve as a cross-method reference and are drawn from a consistent evaluation protocol; the 100-sample benchmark is an estimate and is presented alongside rather than as a replacement for the development phase results in Table~\ref{tab:vae_phases}.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=0.85\textwidth]{images/vae_summary_bar_chart.png}
+    \caption{Semantic VAE method comparison estimated on 100 KITTI-360 validation samples. Mean IoU (left) and Pixel Accuracy (right) are shown for the three configurations: RGB VAE baseline (Iter~1), Semantic Adapter with boundary-weighted loss (Iter~2), and the Semantic-Native VAE with Dice loss (Iter~3). Results are presented as a cross-method estimate on a fixed evaluation set; see Table~\ref{tab:vae_phases} for the full development phase results.}
+    \label{fig:vae_summary_bar}
+\end{figure}
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\textwidth]{images/vae_per_class_iou_chart.png}
+    \caption{Per-class IoU estimated on 100 KITTI-360 validation samples across all three Semantic VAE configurations. Classes are ordered by trainID (left: road; right: bicycle). The native architecture (Iter~3, green) consistently improves rare and thin-structure classes — truck, motorcycle, pole, and traffic sign — while maintaining high IoU on spatially dominant classes such as road and vegetation. Traffic light and bicycle remain at 0\% across all configurations, reflecting extreme class rarity in the evaluation set.}
+    \label{fig:vae_per_class_iou}
+\end{figure}
+
+Quantitative metrics alone do not reveal the spatial character of reconstruction errors. Figure~\ref{fig:vae_mosaic} provides a qualitative overview of all five visualised samples across the three configurations, and Figure~\ref{fig:vae_sample_comparison} presents a detailed single-sample comparison with per-pixel error maps.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\textwidth]{images/vae_mosaic_comparison.png}
+    \caption{Qualitative comparison of Semantic VAE reconstruction across five KITTI-360 validation samples. Each row shows one sample; columns present, from left to right: ground truth, Phase~1 (RGB VAE baseline), Phase~2a (Semantic Adapter), and Phase~2b (Semantic-Native VAE). The mIoU for each prediction is overlaid in the lower-left corner of each panel. Progressive recovery of fine-grained structures — road markings, vegetation boundaries, and vehicle shapes — is visible across the three configurations.}
+    \label{fig:vae_mosaic}
+\end{figure}
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\textwidth]{images/vae_sample_comparison.png}
+    \caption{Detailed single-sample reconstruction comparison (top row: semantic maps; bottom row: pixel-level error maps). Green pixels in the error map indicate correct predictions; red pixels indicate misclassifications. The Phase~1 baseline (second column) produces substantial red regions at class boundaries and around thin structures. Phase~2a (third column) substantially reduces boundary errors. Phase~2b (fourth column) further eliminates most residual errors, with misclassifications concentrated near class transitions and rare-class instances.}
+    \label{fig:vae_sample_comparison}
+\end{figure}
+
+The mosaic in Figure~\ref{fig:vae_mosaic} reveals a consistent pattern across all five samples. Phase~1 reconstructions preserve the coarse layout of each scene — road geometry, sky, and vegetation extent — but introduce colour-blended artefacts at class boundaries, particularly where semantically distinct regions meet (e.g., building--sky, vegetation--road). Phase~2a substantially cleans these boundary regions; however, small objects such as vehicles, poles, and pedestrians remain poorly reconstructed due to the bottleneck imposed by the 3-channel adapter. Phase~2b outputs closely match the ground truth across all five scenes, with residual errors confined to the smallest and rarest class instances.
+
+The per-pixel error maps in Figure~\ref{fig:vae_sample_comparison} quantify these observations spatially. The Phase~1 error map shows dispersed red patches across the entire image, concentrated at region boundaries and around thin structures. The Phase~2a error map is largely green with isolated red clusters near class boundaries. The Phase~2b error map reduces red pixels to narrow boundary zones, confirming that the Semantic-Native architecture successfully preserves class identity throughout the encode--decode pathway.
+
 \FloatBarrier
 % -----------------------------------------------------------------
 \section{Stage~1: Semantic Video Prediction}
